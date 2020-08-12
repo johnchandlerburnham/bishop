@@ -94,7 +94,7 @@ to Terms
 - **Language.Bishop.IPFS**: Utilities for directly interacting with
 an IPFS node
 
-**bide** (planned): A haskeline interactive repl and IPLD dag brower
+- **bide** (planned): A haskeline interactive repl and IPLD dag brower
 
 
 ## Instructions
