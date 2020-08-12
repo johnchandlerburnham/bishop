@@ -46,53 +46,54 @@ dependently-typed language using Bishop as a reduction backend.
 
 ## Repository Contents:
 
-**Language.Bishop.Term**:  Implements the λ-terms and the IPLD encoding
+- **Language.Bishop.Term**:  Implements the λ-terms and the IPLD encoding
 
-**Language.Bishop.Parse**: Parses `.bish` files which have an approximately
+- **Language.Bishop.Parse**: Parses `.bish` files which have an approximately
   Haskell-like syntax:
 
-```
--- Scott-encoded Natural numbers
-zero z s   = z
-succ n z s = s n
+  ```
+  -- Scott-encoded Natural numbers
+  zero z s   = z
+  succ n z s = s n
 
--- The first five Nats
-one   = succ zero
-two   = succ one
-three = succ two
-four  = succ three
-five  = succ four
+  -- The first five Nats
+  one   = succ zero
+  two   = succ one
+  three = succ two
+  four  = succ three
+  five  = succ four
 
--- Double a nat
-double n = (n zero) (|x| succ (succ (double x)))
+  -- Double a nat
+  double n = (n zero) (|x| succ (succ (double x)))
 
--- returns `four`
-test = double two
-```
+  -- returns `four`
+  test = double two
+  ```
 
-**Language.Bishop.Net**: Implements the Lambdascope reduction system.
+- **Language.Bishop.Net**: Implements the Lambdascope reduction system.
 
-**Language.Bishop.Eval**: Reduces Bishop terms via GHC higher-order abstract
+- **Language.Bishop.Eval**: Reduces Bishop terms via GHC higher-order abstract
 syntax.
 
-**ipld.js**: A simple JavaScript file that uses the `ipld-dag-cbor` library to
+- **ipld.js**: A simple JavaScript file that uses the `ipld-dag-cbor` library to
 encode a few test Bishop terms (encoded as JSON). The encoding and content ids
 are bit-identical to the Haskell modules. [TODO: test extensively.]
 
-**test/Spec.Parse**: A collection of test cases for the parser
+- **test/Spec.Parse**: A collection of test cases for the parser
 
 ### Planned:
 
-**test**: More test cases for everything
+- **test**: More test cases for everything
 
-**benchmarks**: Comparing GHC and Net based reduction, probably using criterion.
+- **benchmarks**: Comparing GHC and Net based reduction, probably using criterion.
 Also compare with Formality/Symmetric Interaction Calculus
 
-**Language.Bishop.Compile**: Compiles Terms to Net and reads back Nets
+- **Language.Bishop.Compile**: Compiles Terms to Net and reads back Nets
 to Terms
 
-**Language.Bishop.IPFS-API**: Utilities for directly interacting with
-an IPFS node to 
+- **Language.Bishop.IPFS**: Utilities for directly interacting with
+an IPFS node
+
 **bide** (planned): A haskeline interactive repl and IPLD dag brower
 
 
@@ -238,8 +239,7 @@ possible, then for the forseeable future, Bishop is probably not your first
 choice (until *we* get thousands, or least hundreds, of person-years of
 engineering effort, that is).
 
-The reason Bishop is cool though, in spite of probably not being faster is that
-it's *radically* simpler:
+The reason Bishop is still really cool though is that it's *radically* simpler:
 
 1. GHC is >500,000 lines of extremely dense and complex code. The interaction
    net part of Bishop is less than a thousand.
@@ -255,5 +255,4 @@ it's *radically* simpler:
 4. Bishop as it is right now is as slow as it's ever going to be. You want more
    performance? Just wait.
 
-
-
+λ
