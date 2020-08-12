@@ -1,0 +1,26 @@
+foo x = x x
+
+bar x = x
+
+baz x y z = foo x y z
+
+id = |x| x
+
+app_id = id id
+
+fst = |x,y| x
+snd = |x,y| y
+
+zero z s   = z
+
+succ n z s = s n
+
+one   = succ zero
+two   = succ one
+three = succ two
+four  = succ three
+five  = succ four
+
+double n = (n zero) (|x| succ (succ (double x)))
+
+test = double two
