@@ -4,11 +4,11 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           bishop
+name:           yatima
 version:        0.1.0.0
 description:    Please see the README on GitHub at <https://github.com/johnchandlerburnham/bishop#readme>
-homepage:       https://github.com/johnchandlerburnham/bishop#readme
-bug-reports:    https://github.com/johnchandlerburnham/bishop/issues
+homepage:       https://github.com/johnchandlerburnham/yatima#readme
+bug-reports:    https://github.com/johnchandlerburnham/yatima/issues
 author:         John C. Burnham
 maintainer:     jcb@johnchandlerburnham.com
 copyright:      2020 John Burnham
@@ -21,16 +21,22 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/johnchandlerburnham/bishop
+  location: https://github.com/johnchandlerburnham/yatima
 
 library
   exposed-modules:
-      Language.Bishop.Net
-      Language.Bishop.Term
-      Language.Bishop.Parse
-      Language.Bishop.Eval
+      Language.Yatima.Term
+      Language.Yatima.Uses
+      Language.Yatima.Prim
+      Language.Yatima.Parse
+      Language.Yatima.Defs
+      Language.Yatima.CID
   other-modules:
-      Paths_bishop
+      Language.Bishop.Eval
+      Language.Bishop.Net
+      Language.Bishop.Parse
+      Language.Bishop.Term
+      Paths_yatima
   hs-source-dirs:
       src
   default-extensions: OverloadedStrings MultiWayIf GADTSyntax
@@ -41,44 +47,12 @@ library
     , cborg
     , containers
     , cryptonite
+    , ipfs-api
     , ipld-cid
     , megaparsec
     , mtl
     , multibase
     , multihash-cryptonite
-    , serialise
-    , text
-    , transformers
-    , unsafeperformst
-    , vector
-  default-language: Haskell2010
-
-test-suite spec
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  other-modules:
-      Language.Bishop.Term
-      Language.Bishop.Parse
-      Language.Bishop.Eval
-      Spec.Parse
-  hs-source-dirs:
-      test
-      src
-  default-extensions: OverloadedStrings MultiWayIf GADTSyntax
-  build-depends:
-      QuickCheck
-    , base >=4.7 && <5
-    , base16-bytestring
-    , bytestring
-    , containers
-    , cryptonite
-    , hspec
-    , ipld-cid
-    , megaparsec
-    , mtl
-    , multibase
-    , multihash-cryptonite
-    , raw-strings-qq
     , serialise
     , text
     , transformers

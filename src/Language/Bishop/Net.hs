@@ -19,20 +19,20 @@ _main (_,x,_,_) = x
 _left (_,_,x,_) = x
 _rigt (_,_,_,x) = x
 
-data Kind = Init | Appl | Abst | Dupl | Scop -- | Word | Oper | Ifte
+data Kind = Init | Appl | Abst | Dupl | Scop {- Word | Oper | Ifte -}
   deriving (Enum, Show, Bounded, Eq, Ord)
 
 data Slot = M | L | R deriving (Enum, Show, Bounded, Eq, Ord)
 
-data Info = Info           -- | Size | Bits  |
-  { _isFree    :: Bool     -- | 1    | 0:0   |
-  , _mainSlot  :: Slot     -- | 2    | 1:2   |
-  , _leftSlot  :: Slot     -- | 2    | 3:4   |
-  , _rigtSlot  :: Slot     -- | 2    | 5:6   |
-  , _kind      :: Kind     -- | 3    | 7:9   |
-                           -- | 6    | 10:15 |
-  , _meta      :: Word16   -- | 16   | 16:31 |
-  , _level     :: Word32   -- | 32   | 32:63 |
+data Info = Info           --- | Size | Bits  |
+  { _isFree    :: Bool     --- | 1    | 0:0   |
+  , _mainSlot  :: Slot     --- | 2    | 1:2   |
+  , _leftSlot  :: Slot     --- | 2    | 3:4   |
+  , _rigtSlot  :: Slot     --- | 2    | 5:6   |
+  , _kind      :: Kind     --- | 3    | 7:9   |
+                           --- | 6    | 10:15 |
+  , _meta      :: Word16   --- | 16   | 16:31 |
+  , _level     :: Word32   --- | 32   | 32:63 |
   } deriving Show
 
 infoBits :: Info -> Word64
@@ -145,7 +145,6 @@ findRedexes vs = Set.toList $ V.ifoldr insertRedex Set.empty vs
 
 makeNet :: [Node] -> Net
 makeNet nodes = let vs = V.fromList nodes in Net vs [] (findRedexes vs)
-
 
 isFreed :: Word64 -> State Net Bool
 isFreed i = do

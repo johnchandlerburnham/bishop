@@ -1,6 +1,6 @@
-name:                bishop
+name:                yatima
 version:             0.1.0.0
-github:              "johnchandlerburnham/bishop"
+github:              "johnchandlerburnham/yatima"
 license:             AGPL-3
 author:              "John C. Burnham"
 maintainer:          "jcb@johnchandlerburnham.com"
@@ -19,10 +19,16 @@ dependencies:
 library:
   source-dirs: src
   exposed-modules:
-    - Language.Bishop.Net
-    - Language.Bishop.Term
-    - Language.Bishop.Parse
-    - Language.Bishop.Eval
+    #- Language.Bishop.Net
+    #- Language.Bishop.Term
+    #- Language.Bishop.Parse
+    #- Language.Bishop.Eval
+    - Language.Yatima.Term
+    - Language.Yatima.Uses
+    - Language.Yatima.Prim
+    - Language.Yatima.Parse
+    - Language.Yatima.Defs
+    - Language.Yatima.CID
 
   dependencies:
     - megaparsec
@@ -40,47 +46,48 @@ library:
     - cryptonite
     - multihash-cryptonite
     - base16-bytestring
+    - ipfs-api
 
   default-extensions:
     - OverloadedStrings
     - MultiWayIf
     - GADTSyntax
 
-tests:
-  spec:
-    main:                Spec.hs
-    source-dirs:
-      - test
-      - src
-    #ghc-options:
-    #- -threaded
-    #- -rtsopts
-    #- -with-rtsopts=-N
-    dependencies:
-      - megaparsec
-      - containers
-      - transformers
-      - mtl
-      - text
-      - vector
-      - unsafeperformst
-      - hspec
-      - QuickCheck
-      - raw-strings-qq
-      - bytestring
-      - multibase
-      - ipld-cid
-      - serialise
-      - cryptonite
-      - multihash-cryptonite
-      - base16-bytestring
-    default-extensions:
-      - OverloadedStrings
-      - MultiWayIf
-      - GADTSyntax
-    other-modules:
-      - Language.Bishop.Term
-      - Language.Bishop.Parse
-      - Language.Bishop.Eval
-      - Spec.Parse
-
+#tests:
+#  spec:
+#    main:                Spec.hs
+#    source-dirs:
+#      - test
+#      - src
+#    #ghc-options:
+#    #- -threaded
+#    #- -rtsopts
+#    #- -with-rtsopts=-N
+#    dependencies:
+#      - megaparsec
+#      - containers
+#      - transformers
+#      - mtl
+#      - text
+#      - vector
+#      - unsafeperformst
+#      - hspec
+#      - QuickCheck
+#      - raw-strings-qq
+#      - bytestring
+#      - multibase
+#      - ipld-cid
+#      - serialise
+#      - cryptonite
+#      - multihash-cryptonite
+#      - base16-bytestring
+#    default-extensions:
+#      - OverloadedStrings
+#      - MultiWayIf
+#      - GADTSyntax
+#    other-modules:
+#      - Language.Bishop.Term
+#      - Language.Bishop.Parse
+#      - Language.Bishop.Eval
+#      - Spec.Parse
+#

@@ -45,8 +45,6 @@ data Term where
   Lam :: Name -> Term -> Term
   App :: Term -> Term -> Term
   Ref :: Name -> CID -> Term
-  --Num :: Loc -> Word64 -> Term
-  --Opr :: Loc -> Oper   -> Term -> Term -> Term
   deriving Eq
 
 -- Printer

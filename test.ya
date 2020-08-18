@@ -1,0 +1,25 @@
+foo: (A: Type) -> Type
+foo = \ A: Type => A
+
+bar: (B: Type) -> Type
+bar = \ B: Type => B
+
+Bool : Type
+Bool = @self
+  (0   P: Bool -> Type) ->
+  (True : P (\0 P: Bool -> Type, t: @self P self, f: @self P self => t)) ->
+  (False: P (\0 P: Bool -> Type ,t: @self P self, f: @self P self => f)) ->
+  (P self)
+
+True : Bool
+True = \0 P: Bool -> Type, t: @self P self, f: @self P self => t
+
+False : Bool
+False = \0 P: Bool -> Type, t: @self P self, f: @self P self => f
+
+
+word : I64
+word = 0xdeadbeef
+
+float : F64
+float = (-1.234 1)
