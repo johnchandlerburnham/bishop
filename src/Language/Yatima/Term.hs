@@ -3,8 +3,8 @@
 {-# LANGUAGE GADTSyntax  #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-|
-Module : Language.Yatima.Term
-Description :
+Module      : Language.Yatima.Term
+Description : Defines expressions in the Yatima language
 Copyright   : (c) Sunshine Cybernetics, 2020
 License     : AGPL-3
 Maintainer  : john@sunshinecybernetics.com
@@ -143,21 +143,23 @@ prettyTerm :: Term -> Text
 prettyTerm t = go t
   where
     uses :: Uses -> Text
-    uses Zero = "0 "
-    uses Once = "1 "
+    uses Zero = "ghost "
+    uses Once = "mut "
     uses Many = ""
+
+    name "" = "_"
+    name x  = x
 
     go :: Term -> Text
     go t = case t of
       Var _ n i -> n
       Ref _ n h -> n
-      Lam _ n u t b   -> T.concat ["\\ ", uses u, n, ": ", go t, printLams b]
-      Let _ n u t x b -> T.concat ["let ", uses u, n, ": ", go t, " = ", go x, ";", go b]
-      App _ f a       -> printApps f a
+      Lam _ n u t b   -> T.concat ["(", uses u, name n, ": ", go t, lams b]
+      Let _ n u t x b -> T.concat ["let ",uses u,name n,": ",go t," = ",go x,"; ",go b]
+      App _ f a       -> apps f a
       Typ _           -> "Type"
-      All _ "" u t b  -> T.concat ["(", uses u, "_", ": ", go t,") -> ", go b]
-      All _ n  u t b  -> T.concat ["(", uses u, n, ": ", go t,") -> ", go b]
-      Slf _ n t       -> T.concat ["@",n, " ", go t]
+      All _ n u t b   -> T.concat ["(", uses u, name n, ": ", go t, alls b]
+      Slf _ n t       -> T.concat ["@",name n," ", go t]
       New _ t b       -> T.concat ["new ",go t, " ", go b]
       Eli _ t         -> T.concat ["use ",go t]
       Wrd _ w         -> T.pack (show w)
@@ -167,16 +169,20 @@ prettyTerm t = go t
       Opr _ o a b     -> T.concat ["(", prettyPrim o, " ", go a, " ", go b, ")"]
       Ite _ c t f     -> T.concat ["if ", go c, " then ", go t, " else ", go f]
 
-    printLams :: Term -> Text
-    printLams (Lam _ n u t b) = T.concat [", ", uses u, n,": ", go t, printLams b]
-    printLams x         = T.concat [" => ", go x]
+    lams :: Term -> Text
+    lams (Lam _ n u t b) = T.concat [", ", uses u, n,": ", go t, lams b]
+    lams x               = T.concat [") => ", go x]
 
-    printApps :: Term -> Term -> Text
-    printApps f@(Lam _ _ _ _ _) a  = T.concat ["(", go f, ") ", go a]
-    printApps f  a@(Lam _ _ _ _ _) = T.concat [go f, " (", go a, ")"]
-    printApps f (App _ af aa)      = T.concat [go f, " ", "(", printApps af aa,")"]
-    printApps (App _ af aa) a      = T.concat [printApps af aa, " ", go a]
-    printApps f a                  = T.concat [go f, " ", go a]
+    alls :: Term -> Text
+    alls (All _ n u t b) = T.concat [", ", uses u, n,": ", go t, alls b]
+    alls x               = T.concat [") -> ", go x]
+
+    apps :: Term -> Term -> Text
+    apps f@(Lam _ _ _ _ _) a  = T.concat ["(", go f, ") ", go a]
+    apps f  a@(Lam _ _ _ _ _) = T.concat [go f, " (", go a, ")"]
+    apps f (App _ af aa)      = T.concat [go f, " ", "(", apps af aa,")"]
+    apps (App _ af aa) a      = T.concat [apps af aa, " ", go a]
+    apps f a                  = T.concat [go f, " ", go a]
 
 instance Show Term where
   show t = T.unpack $ prettyTerm t
@@ -279,7 +285,7 @@ encodeAnon term = case term of
                           <> (encodeString "$1" <> encodeAnon cnd)
                           <> (encodeString "$2" <> encodeAnon tru)
                           <> (encodeString "$3" <> encodeAnon fls)
-  LetA use typ exp bdy -> encodeMapLen 4
+  LetA use typ exp bdy -> encodeMapLen 5
                           <> (encodeString "$0" <> encodeString "Let")
                           <> (encodeString "$1" <> encodeInt (fromEnum use))
                           <> (encodeString "$2" <> encodeAnon typ)

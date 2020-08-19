@@ -20,12 +20,11 @@ library:
   source-dirs: src
   exposed-modules:
     #- Language.Bishop.Net
-    #- Language.Bishop.Term
-    #- Language.Bishop.Parse
-    #- Language.Bishop.Eval
     - Language.Yatima.Term
     - Language.Yatima.Uses
     - Language.Yatima.Prim
+    - Language.Yatima.Eval
+    - Language.Yatima.IEEE754
     - Language.Yatima.Parse
     - Language.Yatima.Defs
     - Language.Yatima.CID
@@ -47,6 +46,9 @@ library:
     - multihash-cryptonite
     - base16-bytestring
     - ipfs-api
+    - numeric-extras
+    - cereal
+    - ieee754
 
   default-extensions:
     - OverloadedStrings

@@ -1,25 +1,31 @@
-foo: (A: Type) -> Type
-foo = \ A: Type => A
+// Yatima, a dependently typed programming language
 
-bar: (B: Type) -> Type
-bar = \ B: Type => B
+testDef (A: Type): Type {
+  A
+}
 
-Bool : Type
-Bool = @self
-  (0   P: Bool -> Type) ->
-  (True : P (\0 P: Bool -> Type, t: @self P self, f: @self P self => t)) ->
-  (False: P (\0 P: Bool -> Type ,t: @self P self, f: @self P self => f)) ->
-  (P self)
+testLet : Type {
+  let mut x: Type = Type;
+  Type
+}
 
-True : Bool
-True = \0 P: Bool -> Type, t: @self P self, f: @self P self => t
+testGhost (A, x:A): A {
+  x
+}
 
-False : Bool
-False = \0 P: Bool -> Type, t: @self P self, f: @self P self => f
+selfRef : Type {
+  selfRef
+}
 
+mkBool (B, t:B, f:B): Type {
+  @self
+  (ght P: B -> Type, t: P t, f: P f) -> P self
+}
 
-word : I64
-word = 0xdeadbeef
+testPrim : I64 {
+  (#iadd 2 2)
+}
 
-float : F64
-float = (-1.234 1)
+testRed : I64 {
+  ((x: I64) => x) 1
+}

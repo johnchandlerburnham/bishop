@@ -28,6 +28,8 @@ library
       Language.Yatima.Term
       Language.Yatima.Uses
       Language.Yatima.Prim
+      Language.Yatima.Eval
+      Language.Yatima.IEEE754
       Language.Yatima.Parse
       Language.Yatima.Defs
       Language.Yatima.CID
@@ -45,14 +47,17 @@ library
     , base16-bytestring
     , bytestring
     , cborg
+    , cereal
     , containers
     , cryptonite
+    , ieee754
     , ipfs-api
     , ipld-cid
     , megaparsec
     , mtl
     , multibase
     , multihash-cryptonite
+    , numeric-extras
     , serialise
     , text
     , transformers
