@@ -28,11 +28,12 @@ library
       Language.Yatima.Term
       Language.Yatima.Uses
       Language.Yatima.Prim
-      Language.Yatima.Eval
       Language.Yatima.IEEE754
       Language.Yatima.Parse
       Language.Yatima.Defs
       Language.Yatima.CID
+      Language.Yatima.GHC.Eval
+      Language.Yatima.GHC.Check
   other-modules:
       Language.Bishop.Eval
       Language.Bishop.Net

@@ -23,11 +23,16 @@ library:
     - Language.Yatima.Term
     - Language.Yatima.Uses
     - Language.Yatima.Prim
-    - Language.Yatima.Eval
     - Language.Yatima.IEEE754
     - Language.Yatima.Parse
     - Language.Yatima.Defs
     - Language.Yatima.CID
+    - Language.Yatima.GHC.Eval
+    - Language.Yatima.GHC.Check
+    #- Language.Yatima.Bishop.Compile
+    #- Language.Yatima.Bishop.Net
+    #- Language.Yatima.Bishop.Eval
+    #- Language.Yatima.Bishop.Check
 
   dependencies:
     - megaparsec

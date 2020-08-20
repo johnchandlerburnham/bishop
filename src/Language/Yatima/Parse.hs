@@ -113,11 +113,6 @@ pName = label "a name: \"someFunc\",\"somFunc'\",\"x_15\", \"_1\"" $ do
                     , "else"
                     , "where"
                     , "case"
-                    , "mut"
-                    , "ghost"
-                    , "ght"
-                    , "mut"
-                    , "mutable"
                     , "new"
                     , "elim"
                     ] ++ primNames
@@ -152,11 +147,7 @@ pUses = pUsesAnnotation <|> return Many
 
 pUsesAnnotation :: Parser Uses
 pUsesAnnotation = choice
-  [ symbol "ght"     >> return Zero
-  , symbol "ghost"   >> return Zero
-  , symbol "0"       >> return Zero
-  , symbol "mut"     >> return Once
-  , symbol "mutable" >> return Once
+  [ symbol "0"       >> return Zero
   , symbol "1"       >> return Once
   ]
 
@@ -189,8 +180,8 @@ type BindCtor = Loc -> Name -> Uses -> Term -> Term -> Term
 bindFold :: BindCtor -> Loc -> Term -> [(Name,Uses,Term)] -> Term
 bindFold ctor loc body bs = foldr (\(n,u,t) x -> ctor loc n u t x) body bs
 
--- | Parse a forall: @(ghost A: Type, mut x : A, z : C) -> body@ or
--- | parse a lambda: @(ghost A: Type, mut x : A, z : C) => body@
+-- | Parse a forall: @(0 A: Type, 1 x : A, z : C) -> body@ or
+-- | parse a lambda: @(0 A: Type, 1 x : A, z : C) => body@
 pAllLam :: Int -> Parser Term
 pAllLam from = do
   from <- getOffset
@@ -212,16 +203,8 @@ pBinders = symbol "(" >> next
       typ_      <- pExpr False
       return (name, uses, typ_)
 
-    typBinder :: Parser (Name, Uses, Term)
-    typBinder = do
-      from <- getOffset
-      name <- pName <* space
-      lookAhead (space >> (symbol "," <|> symbol ")"))
-      upto <- getOffset
-      return (name, Zero, Typ (Loc from upto))
-
     next = do
-      (name, uses, typ_) <- (try typBinder) <|> binder
+      (name, uses, typ_) <- binder
       space
       continue  <- (symbol ",") <|> (string ")")
       case continue of
@@ -229,6 +212,20 @@ pBinders = symbol "(" >> next
         "," -> do
           bs <- bind [name] next
           return $ (name,uses,typ_) : bs
+
+pTypeBinders :: Parser [(Name, Uses, Term)]
+pTypeBinders = symbol "<" >> next
+  where
+    next = do
+      from <- getOffset
+      name <- pName <* space
+      upto <- getOffset
+      continue  <- (symbol ",") <|> (string ">")
+      case continue of
+        ">" -> return $ (name, Many, (Typ $ Loc from upto)): []
+        "," -> do
+          bs <- next
+          return $ (name, Many, (Typ $ Loc from upto)) : bs
 
 -- | Parse a self-type: @\@self body@
 pSlf :: Int -> Parser Term
@@ -386,9 +383,11 @@ pDefComment = return "text"
 pDef :: Parser DefDeref
 pDef = label "a definition" $ do
   comment           <- pDefComment
-  from   <- getOffset
-  name   <- pName <* space
-  params <- maybe [] id <$> (optional pBinders)
+  from    <- getOffset
+  name    <- pName <* space
+  typPars <- maybe [] id <$> (optional pTypeBinders)
+  trmPars <- maybe [] id <$> (optional $ bind (fst3 <$> typPars) pBinders)
+  let params = typPars ++ trmPars
   space >> symbol ":"
   typFrom <- getOffset
   typBody <- bind (fst3 <$> params) (pExpr False)
@@ -439,7 +438,7 @@ pFile file = do
     Left  e -> putStr (errorBundlePretty e) >> exitFailure
     Right m -> return m
 
--- | Parse and prettyprint a file
+-- | Parse and pretty-print a file
 prettyFile :: FilePath -> IO ()
 prettyFile file = do
   txt <- TIO.readFile file

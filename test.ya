@@ -1,31 +1,27 @@
-// Yatima, a dependently typed programming language
-
-testDef (A: Type): Type {
+testDef(A: Type): Type {
   A
 }
 
 testLet : Type {
-  let mut x: Type = Type;
+  let 1 x: Type = Type;
   Type
 }
 
-testGhost (A, x:A): A {
-  x
-}
+id<A>(x:A): A { x }
 
-selfRef : Type {
-  selfRef
-}
+//selfRef : Type {
+//  selfRef
+//}
 
-mkBool (B, t:B, f:B): Type {
+mkBool<B>(t:B, f:B): Type {
   @self
   (ght P: B -> Type, t: P t, f: P f) -> P self
 }
 
 testPrim : I64 {
-  (#iadd 2 2)
+  id I64 (#iadd 2 2)
 }
 
 testRed : I64 {
-  ((x: I64) => x) 1
+  ((x: I64) => (#iadd 2 x)) 1
 }

@@ -1,5 +1,15 @@
 {-# LANGUAGE DataKinds   #-}
-module Language.Yatima.CID where
+module Language.Yatima.CID 
+  ( CID(..)
+  , encodeCID
+  , decodeCID
+  , cidToBase
+  , cidToBytes
+  , cidFromBase
+  , hashLazyWith
+  , mkCborCIDv1
+  , makeCID
+  ) where
 
 import qualified Data.ByteString.Multibase  as MB
 
@@ -59,12 +69,11 @@ instance Serialise CID where
   encode = encodeCID
   decode = decodeCID
 
-
-hashlazyWith :: C.HashAlgorithm alg => alg -> BSL.ByteString -> C.Digest alg
-hashlazyWith _ bs = C.hashlazy bs
+hashLazyWith :: C.HashAlgorithm alg => alg -> BSL.ByteString -> C.Digest alg
+hashLazyWith _ bs = C.hashlazy bs
 
 mkCborCIDv1 :: (MH.Multihashable alg, Serialise a) => alg -> a -> CID
-mkCborCIDv1 alg a = CID.newCidV1 CID.DagCbor (hashlazyWith alg (serialise a))
+mkCborCIDv1 alg a = CID.newCidV1 CID.DagCbor (hashLazyWith alg (serialise a))
 
 makeCID :: Serialise a => a -> CID
 makeCID a = mkCborCIDv1 C.Blake2b_256 a
