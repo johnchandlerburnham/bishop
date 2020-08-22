@@ -27,6 +27,7 @@ library
   exposed-modules:
       Language.Bishop.Net
       Language.Bishop.Term
+      Language.Bishop.Compilation
       Language.Bishop.Parse
       Language.Bishop.Eval
   other-modules:
