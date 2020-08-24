@@ -5,7 +5,7 @@ import           Language.Bishop.Net
 import           Data.Word
 import           Data.Vector.Unboxed         (Vector)
 import qualified Data.Vector.Unboxed         as V
-import           Data.Vector.Unboxed.Mutable (MVector, write)
+import           Data.Vector.Unboxed.Mutable (MVector)
 import qualified Data.Vector.Unboxed.Mutable as MV
 import           Control.Monad
 import           Control.Monad.ST
@@ -16,26 +16,50 @@ mkWire i j = mkInit i (L, j)
 isLoop :: Int -> Node -> Bool
 isLoop pos (i,_,l,_) = l == toEnum pos && _leftSlot (readInfoBits i) == L
 
-shiftNodes :: Word64 -> Vector Node -> Vector Node
-shiftNodes s nodes = V.map (\(i,m,l,r) -> (i,m+s,l+s,r+s)) nodes
+shiftNodes :: Word64 -> MVector s Node -> ST s ()
+shiftNodes s nodes = go nodes (MV.length nodes)
+  where
+    go :: MVector s Node -> Int -> ST s ()
+    go nodes 0 = return ()
+    go nodes i = do
+      MV.modify nodes (\(i,m,l,r) -> (i,m+s,l+s,r+s)) (i-1)
+      go nodes (i-1)
 
-lastFreeNode :: Vector Node -> Int
-lastFreeNode nodes = go nodes (V.length nodes - 1) where
-  go :: Vector Node -> Int -> Int
-  go nodes n =
-    case _kind $ getInfo (nodes V.! n) of
-      Init -> n
+catVector :: MV.Unbox a => MVector s a -> MVector s a -> ST s (MVector s a)
+catVector xs ys = do
+  xs <- MV.grow xs leny
+  go xs ys 0
+  return xs
+    where
+      lenx = MV.length xs
+      leny = MV.length ys
+      go :: MV.Unbox a => MVector s a -> MVector s a -> Int -> ST s ()
+      go xs ys pos =
+        if pos == leny
+        then return ()
+        else do
+          y <- MV.read ys pos
+          MV.write xs (pos + lenx) y
+          go xs ys (pos+1)
+
+lastWire :: MVector s Node -> ST s Int
+lastWire nodes = go nodes (MV.length nodes - 1) where
+  go :: MVector s Node -> Int -> ST s Int
+  go nodes n = do
+    kind <- _kind <$> getInfo <$> MV.read nodes n
+    case kind of
+      Init -> return n
       _    -> if n == 0 then error "This should not happen" else go nodes (n - 1)
 
 writeSlot :: MVector s Node -> Int -> Slot -> (Slot, Word64) -> ST s ()
 writeSlot mv idx x p = do
   node <- MV.read mv idx
-  write mv idx $ setSlot node x p
+  MV.write mv idx $ setSlot node x p
 
 changeKind :: MVector s Node -> Int -> Kind -> ST s ()
 changeKind mv idx kind = do
   (i,m,l,r) <- MV.read mv idx
-  write mv idx (infoBits ((readInfoBits i) {_kind = kind}),m,l,r)
+  MV.write mv idx (infoBits ((readInfoBits i) {_kind = kind}),m,l,r)
 
 releaseNode :: MVector s Node -> Int -> ST s ()
 releaseNode mv idx = do
@@ -63,95 +87,87 @@ toNet nodes = Net nodes (findFreeNodes nodes) (findRedexes nodes)
 compile :: Anon -> Net
 compile trm = toNet nodes
   where
-    nodes :: Vector Node
-    nodes =  go 0 trm
-    go :: Int -> Anon -> Vector Node
-    go dep trm = case trm of
+    nodes = runST $ do
+      mnodes <- go trm 0
+      V.freeze mnodes
+    go :: Anon -> Int -> ST s (MVector s Node)
+    go trm dep = case trm of
       VarA 0       ->
         if dep < 1
         then error "Term has free variables"
-        else V.constructN (dep + 1) build
+        else V.thaw $ V.constructN (dep + 1) build
         where
           build :: Vector Node -> Node
           build as
             | V.length as == 0   = mkWire 0 (toEnum dep)
             | V.length as == dep = mkWire (toEnum dep) 0
             | otherwise          = mkLoop (toEnum $ V.length as)
-      VarA idx     ->
-        let
-          net   = go (dep - 1) $ VarA (idx - 1)
-          len   = toEnum $ V.length net
-          (s,i) = getPort L $ net V.! 0
-          scop  = mkScop len (s,i) (L,0) 0 -- TODO: correct level. Is it really necessary?
-          loop  = mkLoop $ len + 1
+      VarA idx     -> do
+        net <- go (VarA (idx - 1)) (dep - 1)
+        let len      = toEnum $ MV.length net
+        (s,i)        <- getPort L <$> MV.read net 0
+        writeSlot net 0            L (L, len)
+        writeSlot net (fromEnum i) s (M, len)
+        net <- MV.grow net 2
+        let scop     = mkScop len (s,i) (L,0) 0 -- TODO: correct level. Is it really necessary?
+        let loop     = mkLoop $ len + 1
+        MV.write net (fromEnum len) scop
+        MV.write net (fromEnum len + 1) loop
+        return net
+      LamA bdy     -> do
+        net <- go bdy (dep + 1)
+        pos          <- lastWire net
+        changeKind net pos Abst 
+        linkWire  net 0 (R, toEnum pos)
+        writeSlot net 0   L (M, toEnum pos)
+        writeSlot net pos M (L, 0)
+        return net
 
-          update :: MVector s Node -> ST s ()
-          update mv = do
-            writeSlot mv 0            L (L, len)
-            writeSlot mv (fromEnum i) s (M, len)
-        in 
-          V.modify update net V.++ V.fromList [scop, loop]
-      LamA bdy     ->
-        let
-          net = go (dep + 1) bdy
-          pos = lastFreeNode net
+      AppA fun arg -> do
+        net1 <- go fun dep
+        let len        = toEnum $ MV.length net1
+        net2 <- go arg dep
+        shiftNodes len net2
+        net            <- catVector net1 net2
 
-          update :: MVector s Node -> ST s ()
-          update mv = do
-            changeKind mv pos Abst 
-            linkWire mv 0 (R, toEnum pos)
-            writeSlot mv 0            L (M, toEnum pos)
-            writeSlot mv pos          M (L, 0)
-        in
-          V.modify update net
+        let nextWire :: MVector s Node -> Int -> ST s Int
+            nextWire mv a = do
+              kind <- _kind <$> getInfo <$> MV.read mv (a + 1)
+              case kind of
+                Init -> return (a + 1)
+                _    -> nextWire mv (a + 1)
+        let pairUp :: MVector s Node -> (Int, Int) -> Int -> ST s ()
+            pairUp mv (a0, b0) n =
+              if n < 1
+              then return ()
+              else do
+                a1 <- nextWire mv a0
+                b1 <- nextWire mv b0
+                changeKind mv a1 Dupl 
+                node1 <- MV.read mv a1
+                node2 <- MV.read mv b1
+                if isLoop a1 node1 || isLoop b1 node2
+                  then do
+                  releaseNode mv a1
+                  when (isLoop b1 node2) (linkWire mv (toEnum a1) (L, toEnum b1))
+                  pairUp mv (a1,b1) (n-1)
+                  else do
+                  linkWire mv (toEnum b1) (R, toEnum a1)
+                  writeSlot mv b1 L (M, toEnum a1)
+                  writeSlot mv a1 M (L, toEnum b1)
+                  pairUp mv (a1,b1) (n-1)
 
-      AppA fun arg ->
-        let
-          net1 = go dep fun
-          len  = toEnum $ V.length net1
-          net  = net1 V.++ (shiftNodes len $ go dep arg)
-
-          nextWire :: MVector s Node -> Int -> ST s Int
-          nextWire mv a = do
-            kind <- _kind <$> getInfo <$> MV.read mv (a + 1)
-            case kind of
-              Init -> return (a + 1)
-              _    -> nextWire mv (a + 1)
-          pairUp :: MVector s Node -> (Int, Int) -> Int -> ST s ()
-          pairUp mv (a0, b0) n =
-            if n < 1
-            then return ()
-            else do
-              a1 <- nextWire mv a0
-              b1 <- nextWire mv b0
-              changeKind mv a1 Dupl 
-              node1 <- MV.read mv a1
-              node2 <- MV.read mv b1
-              if isLoop a1 node1 || isLoop b1 node2
-                then do
-                releaseNode mv a1
-                when (isLoop b1 node2) (linkWire mv (toEnum a1) (L, toEnum b1))
-                pairUp mv (a1,b1) (n-1)
-                else do
-                linkWire mv (toEnum b1) (R, toEnum a1)
-                writeSlot mv b1 L (M, toEnum a1)
-                writeSlot mv a1 M (L, toEnum b1)
-                pairUp mv (a1,b1) (n-1)
-
-          update :: MVector s Node -> ST s ()
-          update mv = do
-            linkWire mv len (R, len)
-            changeKind mv (fromEnum len) Appl -- reuses the space freed by the wire, now main and left ports should be populated
-            linkWire mv 0 (M, len)
-            writeSlot mv 0              L  (L, len)
-            writeSlot mv (fromEnum len) L  (L, 0)
-            pairUp mv (0, fromEnum len) dep
-        in
-          V.modify update net
+        linkWire net len (R, len)
+        changeKind net (fromEnum len) Appl -- reuses the space freed by the wire, now main and left ports should be populated
+        linkWire net 0 (M, len)
+        writeSlot net 0              L  (L, len)
+        writeSlot net (fromEnum len) L  (L, 0)
+        pairUp net (0, fromEnum len) dep
+        return net
       RefA cid     -> error "Reference compilation TODO"
 
-twoAnon :: Anon
-twoAnon = LamA (LamA (AppA (VarA 1) (AppA (VarA 1) (VarA 0))))
+churchTwo :: Anon
+churchTwo = LamA (LamA (AppA (VarA 1) (AppA (VarA 1) (VarA 0))))
 
 testCompile :: Net
-testCompile = compile twoAnon
+testCompile = compile churchTwo
