@@ -27,6 +27,7 @@ library:
     - Language.Yatima.Parse
     - Language.Yatima.Defs
     - Language.Yatima.CID
+    - Language.Yatima.IPFS
     - Language.Yatima.GHC.Eval
     - Language.Yatima.GHC.Check
     #- Language.Yatima.Bishop.Compile
@@ -54,6 +55,10 @@ library:
     - numeric-extras
     - cereal
     - ieee754
+    - servant
+    - servant-client
+    - http-client
+    - aeson
 
   default-extensions:
     - OverloadedStrings

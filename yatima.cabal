@@ -32,6 +32,7 @@ library
       Language.Yatima.Parse
       Language.Yatima.Defs
       Language.Yatima.CID
+      Language.Yatima.IPFS
       Language.Yatima.GHC.Eval
       Language.Yatima.GHC.Check
   other-modules:
@@ -44,13 +45,15 @@ library
       src
   default-extensions: OverloadedStrings MultiWayIf GADTSyntax
   build-depends:
-      base >=4.7 && <5
+      aeson
+    , base >=4.7 && <5
     , base16-bytestring
     , bytestring
     , cborg
     , cereal
     , containers
     , cryptonite
+    , http-client
     , ieee754
     , ipfs-api
     , ipld-cid
@@ -60,6 +63,8 @@ library
     , multihash-cryptonite
     , numeric-extras
     , serialise
+    , servant
+    , servant-client
     , text
     , transformers
     , unsafeperformst
