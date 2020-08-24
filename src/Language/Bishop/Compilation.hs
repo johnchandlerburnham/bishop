@@ -7,10 +7,14 @@ import           Data.Vector.Unboxed         (Vector)
 import qualified Data.Vector.Unboxed         as V
 import           Data.Vector.Unboxed.Mutable (MVector, write)
 import qualified Data.Vector.Unboxed.Mutable as MV
+import           Control.Monad
 import           Control.Monad.ST
 
 mkLoop i   = mkInit i (L, i)
 mkWire i j = mkInit i (L, j)
+
+isLoop :: Int -> Node -> Bool
+isLoop pos (i,_,l,_) = l == toEnum pos && _leftSlot (readInfoBits i) == L
 
 shiftNodes :: Word64 -> Vector Node -> Vector Node
 shiftNodes s nodes = V.map (\(i,m,l,r) -> (i,m+s,l+s,r+s)) nodes
@@ -33,6 +37,11 @@ changeKind mv idx kind = do
   (i,m,l,r) <- MV.read mv idx
   write mv idx (infoBits ((readInfoBits i) {_kind = kind}),m,l,r)
 
+releaseNode :: MVector s Node -> Int -> ST s ()
+releaseNode mv idx = do
+  (i,m,l,r) <- MV.read mv idx
+  MV.write mv idx (infoBits ((readInfoBits i) {_isFree = True}),m,l,r)
+
 linkWire :: MVector s Node -> Word64 -> (Slot, Word64) -> ST s ()
 linkWire mv wirePos (portSlot, portPos) = do
   (s,i) <- getPort L <$> MV.read mv (fromEnum wirePos)
@@ -40,8 +49,19 @@ linkWire mv wirePos (portSlot, portPos) = do
   (s,i) <- getPort L <$> MV.read mv (fromEnum wirePos) -- Need to fetch again in case it was a loop
   writeSlot mv (fromEnum portPos) portSlot  (s,i)
 
+findFreeNodes :: V.Vector Node -> [(Word64)]
+findFreeNodes vs = V.ifoldr addFreeNode [] vs
+  where
+    addFreeNode :: Int -> Node -> [Word64] -> [Word64]
+    addFreeNode i node fs
+      | _isFree (getInfo node) = toEnum i : fs
+      | otherwise              = fs
+
+toNet :: Vector Node -> Net
+toNet nodes = Net nodes (findFreeNodes nodes) (findRedexes nodes)
+
 compile :: Anon -> Net
-compile trm = Net nodes [] (findRedexes nodes)
+compile trm = toNet nodes
   where
     nodes :: Vector Node
     nodes =  go 0 trm
@@ -105,10 +125,19 @@ compile trm = Net nodes [] (findRedexes nodes)
               a1 <- nextWire mv a0
               b1 <- nextWire mv b0
               changeKind mv a1 Dupl 
-              linkWire mv (toEnum b1) (R, toEnum a1)
-              writeSlot mv b1 L (M, toEnum a1)
-              writeSlot mv a1 M (L, toEnum b1)
-              pairUp mv (a1,b1) (n-1)
+              node1 <- MV.read mv a1
+              node2 <- MV.read mv b1
+              if isLoop a1 node1 || isLoop b1 node2
+                then do
+                releaseNode mv a1
+                when (isLoop b1 node2) (linkWire mv (toEnum a1) (L, toEnum b1))
+                pairUp mv (a1,b1) (n-1)
+                else do
+                linkWire mv (toEnum b1) (R, toEnum a1)
+                writeSlot mv b1 L (M, toEnum a1)
+                writeSlot mv a1 M (L, toEnum b1)
+                pairUp mv (a1,b1) (n-1)
+
           update :: MVector s Node -> ST s ()
           update mv = do
             linkWire mv len (R, len)
