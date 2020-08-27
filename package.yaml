@@ -31,7 +31,7 @@ library:
     - Language.Yatima.GHC.Eval
     - Language.Yatima.GHC.Check
     #- Language.Yatima.Bishop.Compile
-    #- Language.Yatima.Bishop.Net
+    - Language.Yatima.Bishop.Net
     #- Language.Yatima.Bishop.Eval
     #- Language.Yatima.Bishop.Check
 
