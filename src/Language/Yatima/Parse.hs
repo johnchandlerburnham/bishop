@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections  #-}
 module Language.Yatima.Parse where
 
 import           Prelude                    hiding (all)
@@ -19,7 +20,7 @@ import           Data.Word
 
 import           System.Exit
 
-import           Text.Megaparsec            hiding (State, parseTest)
+import           Text.Megaparsec            hiding (State)
 import           Text.Megaparsec.Char       hiding (space)
 import qualified Text.Megaparsec.Char.Lexer as L
 
@@ -80,7 +81,9 @@ parseDefault p s = do
 
 -- | A useful testing function
 parserTest :: Show a => Parser a -> Text -> IO ()
-parserTest p s = Prelude.print $ parseDefault p s
+parserTest p s = case parseDefault p s of
+  Left  e -> putStr (errorBundlePretty e)
+  Right x -> print x
 
 -- | A utility for running a `Parser`, since the `RWST` monad wraps `ParsecT`
 parse' :: Show a => Parser a -> ParseEnv -> String -> Text
@@ -115,12 +118,14 @@ pName = label "a name: \"someFunc\",\"somFunc'\",\"x_15\", \"_1\"" $ do
                     , "case"
                     , "new"
                     , "elim"
+                    , "forall"
+                    , "lambda"
                     ] ++ primNames
 
 -- | Consume whitespace, while skipping comments. Yatima line comments begin
 -- with @//@, and block comments are bracketed by @*/@ and @*/@ symbols.
 space :: Parser ()
-space = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/")
+space = L.space space1 (L.skipLineComment "--") (L.skipBlockComment "/*" "*/")
 
 -- | A symbol is a string which can be followed by whitespace. The @sc@ argument
 -- is for parsing indentation sensitive whitespace
@@ -175,57 +180,57 @@ pF64 from = do
 fst3 :: (a,b,c) -> a
 fst3 (x,y,z) = x
 
-type BindCtor = Loc -> Name -> Uses -> Term -> Term -> Term
 
-bindFold :: BindCtor -> Loc -> Term -> [(Name,Uses,Term)] -> Term
-bindFold ctor loc body bs = foldr (\(n,u,t) x -> ctor loc n u t x) body bs
+foldAll :: Loc -> Term -> [(Name, Maybe (Uses, Term))] -> Term
+foldAll loc body bs = foldr (\(n,Just (u,t)) x -> All loc n u t x) body bs
+
+foldLam:: Loc -> Term -> [(Name, Maybe (Uses, Term))] -> Term
+foldLam loc body bs = foldr (\(n,ut) x -> Lam loc n ut x) body bs
 
 -- | Parse a forall: @(0 A: Type, 1 x : A, z : C) -> body@ or
 -- | parse a lambda: @(0 A: Type, 1 x : A, z : C) => body@
-pAllLam :: Int -> Parser Term
-pAllLam from = do
+pLam :: Int -> Parser Term
+pLam from = do
   from <- getOffset
-  bs   <- pBinders <* space
-  ctor <- (symbol "->" >> return All) <|> (symbol "=>" >> return Lam)
-  body <- bind (fst3 <$> bs) (pExpr False)
+  symbol "λ" <|> symbol "lambda"
+  bs   <- pBinders True <* space
+  symbol "=>"
+  body <- bind (fst <$> bs) (pExpr False)
   upto <- getOffset
-  return $ bindFold ctor (Loc from upto) body bs
+  let loc = Loc from upto
+  return $ foldLam loc body bs
 
--- | Parse a binding sequence @(ghost A: Type, mut x : A, z : C)@
-pBinders :: Parser [(Name, Uses, Term)]
-pBinders = symbol "(" >> next
+pAll :: Int -> Parser Term
+pAll from = do
+  from <- getOffset
+  symbol "∀" <|> symbol "forall"
+  bs   <- pBinders False <* space
+  symbol "->"
+  body <- bind (fst <$> bs) (pExpr False)
+  upto <- getOffset
+  let loc = Loc from upto
+  return $ foldAll loc body bs
+
+pBinder :: Bool -> Parser [(Name, Maybe (Uses, Term))]
+pBinder annOptional  = if annOptional then ann <|> unAnn else ann
   where
-    binder :: Parser (Name, Uses, Term)
-    binder = do
-      uses      <- pUses
-      name      <- pName <* space
-      symbol ":"
-      typ_      <- pExpr False
-      return (name, uses, typ_)
+    unAnn = pure . (,Nothing) <$> pName
+    ann = do
+      symbol "("
+      uses  <- pUses
+      names <- sepBy1 pName space
+      typ_  <- symbol ":" >> pExpr False
+      string ")"
+      return $ (,Just (uses,typ_)) <$> names
 
-    next = do
-      (name, uses, typ_) <- binder
-      space
-      continue  <- (symbol ",") <|> (string ")")
-      case continue of
-        ")" -> return $ (name,uses,typ_) : []
-        "," -> do
-          bs <- bind [name] next
-          return $ (name,uses,typ_) : bs
-
-pTypeBinders :: Parser [(Name, Uses, Term)]
-pTypeBinders = symbol "<" >> next
+-- | Parse a binding sequence @(0 A: Type) (1 x : A) (z : C)@
+pBinders :: Bool -> Parser [(Name, Maybe (Uses, Term))]
+pBinders annOpt = (try $ next) <|> (pBinder annOpt)
   where
-    next = do
-      from <- getOffset
-      name <- pName <* space
-      upto <- getOffset
-      continue  <- (symbol ",") <|> (string ">")
-      case continue of
-        ">" -> return $ (name, Many, (Typ $ Loc from upto)): []
-        "," -> do
-          bs <- next
-          return $ (name, Many, (Typ $ Loc from upto)) : bs
+   next = do
+     b  <- pBinder annOpt <* space
+     bs <- bind (fst <$> b) $ pBinders annOpt
+     return $ b ++ bs
 
 -- | Parse a self-type: @\@self body@
 pSlf :: Int -> Parser Term
@@ -300,16 +305,26 @@ pOpr from = do
   upto <- getOffset
   return $ Opr (Loc from upto) p a b
 
+pDecl :: Int -> Parser (Name, Term, Term)
+pDecl from = do
+  nam <- pName <* space
+  bs   <- pBinders False <* space
+  typBody <- symbol ":" >> bind (fst <$> bs) (pExpr False)
+  typUpto <- getOffset
+  let typ = foldAll (Loc from typUpto) typBody bs
+  symbol "="
+  expBody <- bind (nam:(fst <$> bs)) $ pExpr False
+  expUpto <- getOffset
+  let exp = foldLam (Loc from expUpto) expBody bs
+  return (nam, typ, exp)
+
+
 -- | Parse a local, possibly recursive, definition
 pLet :: Int -> Parser Term
 pLet from = do
   symbol "let"
-  use <- pUses
-  nam <- pName <* space
-  symbol ":"
-  typ <- pExpr False
-  symbol "="
-  exp <- bind [nam] $ pExpr False
+  use  <- pUses
+  (nam,typ,exp) <- pDecl from
   symbol ";"
   bdy <- bind [nam] $ pExpr False
   upto <- getOffset
@@ -344,13 +359,15 @@ pTerm = do
     , pOpr from
     , pIte from
     , pLet from
-    , try $ (pAllLam from)
+    , pLam from
+    , pAll from
     , pExpr True
     , pVar from
     ]
   choice
-    [ try $ pArr from t
-    , return t
+    [ --try $ pArr from t
+    --, 
+    return t
     ]
 
 -- | Parse an unquantified function arrow: @A -> B@
@@ -382,26 +399,14 @@ pDefComment = return "text"
 -- | Parse a definition
 pDef :: Parser DefDeref
 pDef = label "a definition" $ do
-  comment           <- pDefComment
   from    <- getOffset
-  name    <- pName <* space
-  typPars <- maybe [] id <$> (optional pTypeBinders)
-  trmPars <- maybe [] id <$> (optional $ bind (fst3 <$> typPars) pBinders)
-  let params = typPars ++ trmPars
-  space >> symbol ":"
-  typFrom <- getOffset
-  typBody <- bind (fst3 <$> params) (pExpr False)
-  typUpto <- getOffset
-  symbol "{"
-  trmBody <- bind (name : (fst3 <$> params)) (pExpr False)
-  string "}"
+  comment <- pDefComment
+  symbol "def"
+  (nam, typ, exp) <- pDecl from
   upto   <- getOffset
-  let trmLoc = Loc from upto
-  let typLoc = Loc typFrom typUpto
-  let typ_ = bindFold All typLoc typBody params
-  let term = bindFold Lam trmLoc trmBody params
-  let (termAnon, termMeta) = desaturate name trmLoc term
-  let (typeAnon, typeMeta) = desaturate name typLoc typ_
+  let loc = Loc from upto
+  let (termAnon, termMeta) = desaturate nam loc exp
+  let (typeAnon, typeMeta) = desaturate nam loc typ
   return $ DefDeref comment termAnon termMeta typeAnon typeMeta
 
 -- | Parse a sequence of definitions, e.g. in a file

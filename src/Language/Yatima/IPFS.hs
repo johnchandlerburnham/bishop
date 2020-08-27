@@ -32,7 +32,7 @@ dagPut :: BSL.ByteString -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text
 dagPut = client (Proxy :: Proxy ApiV0DagPut)
 
 testAnon :: Anon
-testAnon = LamA Many I64A (VarA 0)
+testAnon = LamA (Just (Many, I64A)) (VarA 0)
 
 fromRight (Right a) = a
 

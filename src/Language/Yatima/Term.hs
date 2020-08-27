@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds   #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE GADTSyntax  #-}
+{-# LANGUAGE TupleSections  #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-|
 Module      : Language.Yatima.Term
@@ -105,7 +106,7 @@ data Term where
   -- | Global immutable IPFS-compatible content-addressed reference
   Ref :: Loc -> Name -> CID -> Term
   -- | A typed lambda with usage semirig a la Quantiative Type Theory
-  Lam :: Loc -> Name -> Uses -> Term -> Term -> Term
+  Lam :: Loc -> Name -> Maybe (Uses,Term) -> Term -> Term
   -- | An application of a function to an argument
   App :: Loc -> Term -> Term -> Term
   -- | An inline local definition, this also requires type and usage information
@@ -143,8 +144,8 @@ prettyTerm :: Term -> Text
 prettyTerm t = go t
   where
     uses :: Uses -> Text
-    uses Zero = "ghost "
-    uses Once = "mut "
+    uses Zero = "0 "
+    uses Once = "1 "
     uses Many = ""
 
     name "" = "_"
@@ -154,11 +155,11 @@ prettyTerm t = go t
     go t = case t of
       Var _ n i -> n
       Ref _ n h -> n
-      Lam _ n u t b   -> T.concat ["(", uses u, name n, ": ", go t, lams b]
+      Lam _ n ut b    -> T.concat ["λ", lams n ut b]
       Let _ n u t x b -> T.concat ["let ",uses u,name n,": ",go t," = ",go x,"; ",go b]
       App _ f a       -> apps f a
       Typ _           -> "Type"
-      All _ n u t b   -> T.concat ["(", uses u, name n, ": ", go t, alls b]
+      All _ n u t b -> T.concat ["∀", alls n u t b]
       Slf _ n t       -> T.concat ["@",name n," ", go t]
       New _ t b       -> T.concat ["new ",go t, " ", go b]
       Eli _ t         -> T.concat ["use ",go t]
@@ -169,24 +170,33 @@ prettyTerm t = go t
       Opr _ o a b     -> T.concat ["(", prettyPrim o, " ", go a, " ", go b, ")"]
       Ite _ c t f     -> T.concat ["if ", go c, " then ", go t, " else ", go f]
 
-    lams :: Term -> Text
-    lams (Lam _ n u t b) = T.concat [", ", uses u, n,": ", go t, lams b]
-    lams x               = T.concat [") => ", go x]
+    lams :: Name -> Maybe (Uses, Term) -> Term -> Text
+    lams n ut b = case b of
+       Lam _ n' ut' b' -> T.concat [txt, lams n' ut' b']
+       _               -> T.concat [txt, " => ", go b]
+       where
+         txt = case ut of
+            Nothing    -> T.concat [" ", n]
+            Just (u,t) -> T.concat [" (", uses u, n,": ", go t,")"]
 
-    alls :: Term -> Text
-    alls (All _ n u t b) = T.concat [", ", uses u, n,": ", go t, alls b]
-    alls x               = T.concat [") -> ", go x]
+    alls :: Name -> Uses -> Term -> Term -> Text
+    alls n u t b = case b of
+      All _ n' u' t' b' -> T.concat [txt, alls n' u' t' b']
+      _                 -> T.concat [txt, " -> ", go b]
+      where
+        txt = case (n, u, t) of
+          ("", Many, t) -> T.concat [" ", go t]
+          _             -> T.concat [" (", uses u, n,": ", go t,")"]
 
     apps :: Term -> Term -> Text
-    apps f@(Lam _ _ _ _ _) a  = T.concat ["(", go f, ") ", go a]
-    apps f  a@(Lam _ _ _ _ _) = T.concat [go f, " (", go a, ")"]
-    apps f (App _ af aa)      = T.concat [go f, " ", "(", apps af aa,")"]
-    apps (App _ af aa) a      = T.concat [apps af aa, " ", go a]
-    apps f a                  = T.concat [go f, " ", go a]
+    apps f@(Lam _ _ _ _) a  = T.concat ["(", go f, ") ", go a]
+    apps f  a@(Lam _ _ _ _) = T.concat [go f, " (", go a, ")"]
+    apps f (App _ af aa)    = T.concat [go f, " ", "(", apps af aa,")"]
+    apps (App _ af aa) a    = T.concat [apps af aa, " ", go a]
+    apps f a                = T.concat [go f, " ", go a]
 
 instance Show Term where
   show t = T.unpack $ prettyTerm t
-
 
 -- * Serialisation datatypes
 
@@ -196,7 +206,7 @@ instance Show Term where
 data Anon where
   VarA :: Int -> Anon
   RefA :: CID -> Anon
-  LamA :: Uses -> Anon -> Anon -> Anon
+  LamA :: Maybe (Uses,Anon) -> Anon -> Anon
   LetA :: Uses -> Anon -> Anon -> Anon -> Anon
   AppA :: Anon -> Anon -> Anon
   TypA :: Anon
@@ -265,11 +275,10 @@ encodeAnon term = case term of
                           <> (encodeString "$0" <> encodeString "New")
                           <> (encodeString "$1" <> encodeAnon typ)
                           <> (encodeString "$2" <> encodeAnon trm)
-  LamA use typ bdy     -> encodeMapLen 4
+  LamA typ bdy         -> encodeMapLen 3
                           <> (encodeString "$0" <> encodeString "Lam")
-                          <> (encodeString "$1" <> encodeInt (fromEnum use))
-                          <> (encodeString "$2" <> encodeAnon typ)
-                          <> (encodeString "$3" <> encodeAnon bdy)
+                          <> (encodeString "$1" <> encodeMaybeTyp typ)
+                          <> (encodeString "$2" <> encodeAnon bdy)
   AllA use typ bdy     -> encodeMapLen 4
                           <> (encodeString "$0" <> encodeString "All")
                           <> (encodeString "$1" <> encodeInt (fromEnum use))
@@ -291,6 +300,12 @@ encodeAnon term = case term of
                           <> (encodeString "$2" <> encodeAnon typ)
                           <> (encodeString "$3" <> encodeAnon exp)
                           <> (encodeString "$4" <> encodeAnon bdy)
+
+encodeMaybeTyp :: Maybe (Uses,Anon) -> Encoding
+encodeMaybeTyp Nothing      = encodeListLen 0
+encodeMaybeTyp (Just (u,t)) = encodeListLen 2
+                              <> encodeInt (fromEnum u)
+                              <> encodeAnon t
 
 -- | A helpful utility function like `when`, but with with pretty text errors
 failM :: (Monad m, MonadFail m) => Bool -> [Text] -> m ()
@@ -325,6 +340,17 @@ decodeUses = toEnum <$> decodeInt
 decodePrim :: Decoder s Prim
 decodePrim = toEnum <$> decodeInt
 
+decodeMaybeTyp :: Decoder s (Maybe (Uses, Anon))
+decodeMaybeTyp = do
+  size <- decodeListLen
+  case size of
+    0 -> return Nothing
+    2 -> do
+      u <- decodeUses
+      t <- decodeAnon
+      return (Just (u,t))
+    _ -> fail "invalid list size"
+
 -- | Decode an `Encoding` generated by `encodeAnon`
 decodeAnon :: Decoder s Anon
 decodeAnon = do
@@ -347,18 +373,17 @@ decodeAnon = do
         "Wrd" -> WrdA <$> decodeField "Wrd" "$1" decodeWord64
         "Dbl" -> DblA <$> decodeField "Dbl" "$1" decodeDouble
     3 -> do
-      ctor <- decodeCtor "Anon" "$0" ["App", "New"]
+      ctor <- decodeCtor "Anon" "$0" ["App", "New", "Lam"]
       case ctor of
         "App" -> AppA <$> decodeField "App" "$1" decodeAnon
                       <*> decodeField "App" "$2" decodeAnon
         "New" -> NewA <$> decodeField "New" "$1" decodeAnon
                       <*> decodeField "New" "$2" decodeAnon
-    4 -> do
-      ctor <- decodeCtor "Anon" "$0" ["Lam", "All", "Opr", "Ite"]
-      case ctor of
-        "Lam" -> LamA <$> decodeField "Lam" "$1" decodeUses
+        "Lam" -> LamA <$> decodeField "Lam" "$1" decodeMaybeTyp
                       <*> decodeField "Lam" "$2" decodeAnon
-                      <*> decodeField "Lam" "$3" decodeAnon
+    4 -> do
+      ctor <- decodeCtor "Anon" "$0" ["All", "Opr", "Ite"]
+      case ctor of
         "All" -> AllA <$> decodeField "All" "$1" decodeUses
                       <*> decodeField "All" "$2" decodeAnon
                       <*> decodeField "All" "$3" decodeAnon
@@ -480,7 +505,9 @@ desaturate n l t = let (a,(nm,_)) = runState (go t) (init,1) in (a,nm)
       Ref l n hsh     -> bind n >> locs l >> return (RefA hsh)
       Slf l n t       -> bind n >> locs l >> SlfA <$> go t
       Eli l t         -> locs l >> EliA <$> go t
-      Lam l n u t b   -> bind n >> locs l >> LamA u <$> go t <*> go b
+      Lam l n ut b    -> case ut of
+        Just (u,t) -> bind n >> locs l >> LamA <$> (Just . (u,) <$> go t) <*> go b
+        _          -> bind n >> locs l >> LamA Nothing <$> go b
       All l n u t b   -> bind n >> locs l >> AllA u <$> go t <*> go b
       Let l n u x t b -> bind n >> locs l >> LetA u <$> go x <*> go t <*> go b
       App l f a       -> locs l >> AppA <$> go f <*> go a
@@ -513,7 +540,9 @@ resaturate anon meta = fst $ runState (go anon) (meta,1)
       WrdA w       -> nameLoc >>= \(n,l) -> return $ Wrd l w
       DblA d       -> nameLoc >>= \(n,l) -> return $ Dbl l d
       VarA idx     -> nameLoc >>= \(n,l) -> return $ Var l n idx
-      LamA u t b   -> nameLoc >>= \(n,l) -> Lam l n u <$> go t <*> go b
+      LamA ut b    -> case ut of
+        Just (u,t) -> nameLoc >>= \(n,l) -> Lam l n <$> (Just . (u,) <$> go t) <*> go b
+        _          -> nameLoc >>= \(n,l) -> Lam l n Nothing <$> go b
       AllA u t b   -> nameLoc >>= \(n,l) -> All l n u <$> go t <*> go b
       LetA u x t b -> nameLoc >>= \(n,l) -> Let l n u <$> go x <*> go t <*> go b
       SlfA t       -> nameLoc >>= \(n,l) -> Slf l n <$> go t

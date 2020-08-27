@@ -14,12 +14,19 @@ Once  *# x    = x
 Many *# Once  = Many
 Many *# x    = x
 
-(≤#) :: Uses -> Uses -> Bool
-Zero ≤# x    = True
-Once  ≤# Zero = False
-Once  ≤# x    = True
-Many ≤# Many = True
-Many ≤# x    = False
+(<#) :: Uses -> Uses -> Bool
+Zero <# Zero = False
+Zero <# x    = True
+Once <# Many = True
+Once <# x    = False
+Many <# x    = False
+
+(>#) :: Uses -> Uses -> Bool
+Zero ># x    = False
+Once ># Zero = True
+Once ># x    = False
+Many ># Many = False
+Many ># x    = True
 
 -- Division of multiplicities: x/y is defined as the largest d such that d*y is not larger than x
 (/#) :: Uses -> Uses -> Uses

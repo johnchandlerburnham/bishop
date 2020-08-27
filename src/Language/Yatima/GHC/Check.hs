@@ -97,9 +97,14 @@ equal a b defs dep = runST $ top a b dep
                  return $ cond_eq && true_eq && fals_eq
                _ -> return False
 
-data CheckErr = CheckErr Loc Ctx Text deriving Show
+data CheckErr
+  = QuantityMismatch Loc Ctx Bool Uses Uses
+  | ImplementationBugEmptyContext Loc Ctx
+  | CustomErr Loc Ctx Text
+  deriving Show
+
 type Ctx      = Seq (Uses, HOAS)
-type PreCtx   = Seq (Uses, HOAS) -- should stand for contexts with only the Zero quantity
+--type PreCtx   = Seq (Uses, HOAS) -- should stand for contexts with only the Zero quantity
 
 multiplyCtx :: Uses -> Ctx -> Ctx
 multiplyCtx rho ctx = fmap mul ctx
@@ -110,29 +115,45 @@ addCtx :: Ctx -> Ctx -> Ctx
 addCtx ctx ctx' = Seq.zipWith add ctx ctx'
   where add (pi, typ) (pi', _) = (pi +# pi', typ)
 
-mismatchMsg :: Bool -> Uses -> Uses -> Text
-mismatchMsg linear found expected =
-  T.concat ["Quantity mismatch.",
-             "\nFound: ", T.pack $ show found,
-             "\nExcepted: ", T.pack $ show expected,
-             if linear then "" else " or less."]
+--mismatchMsg :: Bool -> Uses -> Uses -> Text
+--mismatchMsg linear found expected =
+--  T.concat ["Quantity mismatch.",
+--             "\nFound: ", T.pack $ show found,
+--             "\nExcepted: ", T.pack $ show expected,
+--             if linear then "" else " or less."]
 
---check :: Bool -> PreCtx -> Uses -> HOAS -> HOAS -> Defs -> Except CheckErr Ctx
---check linear prectx rho trm typ defs =
---  case trm of
---    Lam loc _ name trm_body -> case reduce typ defs False of
---      All _ pi _ _ bind typ_body -> do
---        let var = Var noLoc name (length prectx)
---        let prectx'  = prectx |> (Zero, bind)
---        ctx' <- check linear prectx' One (trm_body var) (typ_body trm var) defs
---        case viewr ctx' of
---          EmptyR               -> throwError (CheckErr loc prectx "Impossible")
---          ctx :> (π', _) -> do
---            unless (if linear then π' == π else π' ≤# π)
---              (throwError (CheckErr loc prectx $ mismatchMsg linear π' π))
---            return $ multiplyCtx ρ ctx
---      _  -> do
---        throwError (CheckErr loc prectx "Lambda has non-function type")
+check :: Bool -> Ctx -> Uses -> HOAS -> HOAS -> Defs -> Except CheckErr Ctx
+check affine ctx rho trm typ defs =
+  case trm of
+    LamH loc name uses trm_typ trm_body -> case reduce trm_typ defs of
+      AllH _ _ pi bind typ_body -> do
+        let var = VarH noLoc name (length ctx)
+        let ctx' = (ctx |> (Zero,bind))
+        ctx' <- check affine ctx' Once (trm_body var) (typ_body var) defs
+        case viewr ctx' of
+          EmptyR -> throwError $ ImplementationBugEmptyContext loc ctx
+          ctx :> (pi', _) -> do
+            when (if linear then pi' /= pi else pi' ># pi)
+     --       unless (if linear then pi' == pi else pi' ≤# pi)
+     --         (throwError (QuantityMismatch loc ctx linear pi' pi))
+     --       return $ multiplyCtx rho ctx
+      _ -> do
+        throwError (CustomErr noLoc ctx "Impossible")
+    _ -> do
+      throwError (CustomErr noLoc ctx "Impossible")
+
+     -- AllH _ _ pi bind typ_body -> do
+     --   let var = VarH noLoc name (length prectx)
+     --   let prectx'  = prectx |> (Zero, bind)
+     --   ctx' <- check linear prectx' Once (trm_body var) (typ_body trm var) defs
+     --   case viewr ctx' of
+     --     EmptyR               -> throwError (CustomErr loc ctx "Impossible")
+     --     ctx :> (pi', _) -> do
+     --       unless (if linear then pi' == pi else pi' ≤# pi)
+     --         (throwError (QuantityMismatch loc ctx linear pi' pi))
+     --       return $ multiplyCtx rho ctx
+      --_  -> do
+      --  throwError (CustomErr loc ctx "Lambda has non-function type")
 --    Let loc π name expr body -> do
 --      (ctx, expr_typ) <- infer linear prectx π expr defs
 --      let var = Var noLoc name (length prectx)
@@ -163,9 +184,6 @@ mismatchMsg linear found expected =
 ----    Ref l n -> case (_defs defs) Map.!? n of
 ----      Just (Expr _ t _) -> return (prectx, t)
 ----      Nothing           -> throwError (CheckErr l prectx (T.concat ["Undefined reference ", n]))
-----    Ann loc expr typ -> do
-----      ctx <- check linear prectx ρ expr typ defs
-----      return (ctx, typ)
 ----    Typ l   -> return (prectx, Typ l)
 ----    All loc π self name bind body -> do
 ----      let self_var = Var noLoc self $ length prectx
