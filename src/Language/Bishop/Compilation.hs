@@ -10,37 +10,34 @@ import qualified Data.Vector.Unboxed.Mutable as MV
 import           Control.Monad
 import           Control.Monad.ST
 
+doTimes :: Monad m => Int -> (Int -> Bool) -> (Int -> Int) -> (Int -> m a) -> m ()
+doTimes i p inc body
+  | p i = do
+      body i
+      doTimes (inc i) p inc body
+  | otherwise = return ()
+
 mkLoop i   = mkInit i (L, i)
 mkWire i j = mkInit i (L, j)
 
-isLoop :: Int -> Node -> Bool
-isLoop pos (i,_,l,_) = l == toEnum pos && _leftSlot (readInfoBits i) == L
+isLoop :: MVector s Node -> Int -> ST s Bool
+isLoop mv pos = do
+  (i,_,l,_) <- MV.read mv pos
+  return (l == toEnum pos && _leftSlot (readInfoBits i) == L)
 
 shiftNodes :: Word64 -> MVector s Node -> ST s ()
-shiftNodes s nodes = go nodes (MV.length nodes)
-  where
-    go :: MVector s Node -> Int -> ST s ()
-    go nodes 0 = return ()
-    go nodes i = do
-      MV.modify nodes (\(i,m,l,r) -> (i,m+s,l+s,r+s)) (i-1)
-      go nodes (i-1)
+shiftNodes s nodes = doTimes 0 (< MV.length nodes) (+ 1) (\i -> MV.modify nodes (\(i,m,l,r) -> (i,m+s,l+s,r+s)) i)
 
 catVector :: MV.Unbox a => MVector s a -> MVector s a -> ST s (MVector s a)
 catVector xs ys = do
+  let lenx = MV.length xs
+  let leny = MV.length ys
   xs <- MV.grow xs leny
-  go xs ys 0
+  let body pos = do
+        y <- MV.read ys pos
+        MV.write xs (pos + lenx) y
+  doTimes 0 (< leny) (+ 1) body
   return xs
-    where
-      lenx = MV.length xs
-      leny = MV.length ys
-      go :: MV.Unbox a => MVector s a -> MVector s a -> Int -> ST s ()
-      go xs ys pos =
-        if pos == leny
-        then return ()
-        else do
-          y <- MV.read ys pos
-          MV.write xs (pos + lenx) y
-          go xs ys (pos+1)
 
 lastWire :: MVector s Node -> ST s Int
 lastWire nodes = go nodes (MV.length nodes - 1) where
@@ -104,20 +101,20 @@ compile trm = toNet nodes
             | otherwise          = mkLoop (toEnum $ V.length as)
       VarA idx     -> do
         net <- go (VarA (idx - 1)) (dep - 1)
-        let len      = toEnum $ MV.length net
-        (s,i)        <- getPort L <$> MV.read net 0
+        let len = toEnum $ MV.length net
+        (s,i) <- getPort L <$> MV.read net 0
         writeSlot net 0            L (L, len)
         writeSlot net (fromEnum i) s (M, len)
-        net <- MV.grow net 2
-        let scop     = mkScop len (s,i) (L,0) 0 -- TODO: correct level. Is it really necessary?
-        let loop     = mkLoop $ len + 1
+        net   <- MV.grow net 2
+        let scop = mkScop len (s,i) (L,0) 0 -- TODO: correct level. Is it really necessary?
+        let loop = mkLoop $ len + 1
         MV.write net (fromEnum len) scop
         MV.write net (fromEnum len + 1) loop
         return net
       LamA bdy     -> do
         net <- go bdy (dep + 1)
-        pos          <- lastWire net
-        changeKind net pos Abst 
+        pos <- lastWire net
+        changeKind net pos Abst
         linkWire  net 0 (R, toEnum pos)
         writeSlot net 0   L (M, toEnum pos)
         writeSlot net pos M (L, 0)
@@ -125,10 +122,10 @@ compile trm = toNet nodes
 
       AppA fun arg -> do
         net1 <- go fun dep
-        let len        = toEnum $ MV.length net1
+        let len = toEnum $ MV.length net1
         net2 <- go arg dep
         shiftNodes len net2
-        net            <- catVector net1 net2
+        net  <- catVector net1 net2
 
         let nextWire :: MVector s Node -> Int -> ST s Int
             nextWire mv a = do
@@ -143,13 +140,13 @@ compile trm = toNet nodes
               else do
                 a1 <- nextWire mv a0
                 b1 <- nextWire mv b0
-                changeKind mv a1 Dupl 
-                node1 <- MV.read mv a1
-                node2 <- MV.read mv b1
-                if isLoop a1 node1 || isLoop b1 node2
+                changeKind mv a1 Dupl
+                loopA <- isLoop mv a1
+                loopB <- isLoop mv b1
+                if loopA || loopB
                   then do
                   releaseNode mv a1
-                  when (isLoop b1 node2) (linkWire mv (toEnum a1) (L, toEnum b1))
+                  when loopB (linkWire mv (toEnum a1) (L, toEnum b1))
                   pairUp mv (a1,b1) (n-1)
                   else do
                   linkWire mv (toEnum b1) (R, toEnum a1)
@@ -166,8 +163,116 @@ compile trm = toNet nodes
         return net
       RefA cid     -> error "Reference compilation TODO"
 
+unwind :: MVector s Node -> ST s ()
+unwind nodes = do
+  let body pos = do
+        (b,iM,iL,iR) <- MV.read nodes pos
+        let info = readInfoBits b
+        if _kind info == Appl
+          then do
+          let sM = _mainSlot info
+          let sL = _leftSlot info
+          let sR = _rigtSlot info
+          MV.write nodes pos $ mkAppl pos (sL,iL) (sR,iR) (sM,iM)
+          let rotate slot = case slot of
+                M -> R
+                L -> M
+                R -> L
+          if fromEnum iL == pos
+            then writeSlot nodes pos M (rotate sL, iL)
+            else writeSlot nodes (fromEnum iL) sL (M, toEnum pos)
+          if fromEnum iR == pos
+            then writeSlot nodes pos L (rotate sR, iR)
+            else writeSlot nodes (fromEnum iR) sR (L, toEnum pos)
+          if fromEnum iM == pos
+            then writeSlot nodes pos R (rotate sM, iM)
+            else writeSlot nodes (fromEnum iM) sM (R, toEnum pos)
+          else return ()
+  doTimes 0 (< MV.length nodes) (+ 1) body
+
+scopeRemove :: MVector s Node -> ST s ()
+scopeRemove nodes = do
+  let body pos = do
+        (b,iM,iL,iR) <- MV.read nodes pos
+        let info = readInfoBits b
+        if _kind info == Scop
+          then do
+          let sM = _mainSlot info
+          let sL = _leftSlot info
+          MV.write nodes pos $ mkScop (toEnum pos) (sL,iL) (sM,iM) 0
+          let flip slot = case slot of
+                M -> L
+                L -> M
+                R -> R
+          if fromEnum iL == pos
+            then writeSlot nodes pos M (flip sL, iL)
+            else writeSlot nodes (fromEnum iL) sL (M, toEnum pos)
+          if fromEnum iM == pos
+            then writeSlot nodes pos L (flip sM, iM)
+            else writeSlot nodes (fromEnum iM) sM (L, toEnum pos)
+          else return ()
+  doTimes 0 (< MV.length nodes) (+ 1) body
+
+loopCut :: MVector s Node -> ST s ()
+loopCut nodes = do
+  let body pos = do
+        (b,_,iL,_) <- MV.read nodes pos
+        let info = readInfoBits b
+        if _kind info == Abst
+          then do
+          let sL = _leftSlot info
+          writeSlot nodes pos L (L, toEnum pos)
+          writeSlot nodes (fromEnum iL) sL (sL, iL)
+          else return ()
+  doTimes 0 (< MV.length nodes) (+ 1) body
+
+fromNodes :: Vector Node -> Anon
+fromNodes nodes = go nodes start 0
+  where
+    (_,_,start,_) = nodes V.! 0
+    len = V.length nodes
+    go :: Vector Node -> Word64 -> Integer -> Anon
+    go nodes pos dep =
+      let
+        (b,iM,iL,iR) = nodes V.! (fromEnum pos)
+        info = readInfoBits b
+        sL   = _leftSlot info
+        sR   = _rigtSlot info
+        go' i dep = if i == pos then VarA dep else go nodes i dep
+      in case _kind info of
+        Appl -> AppA (go' iR dep) (go' iL dep)
+        Abst -> LamA (go' iR dep)
+        Scop -> go' iL (dep + 1)
+        Init -> error "Should not happen (INIT)"
+        Dupl -> error "Should not happen (DUPL)"
+
+reduceNoScop :: Net -> (Net, Int)
+reduceNoScop x = reduce x -- TODO
+
+decompile :: Net -> Anon
+decompile net = runST $ do
+  mnodes <- V.thaw $ _nodes net
+  unwind mnodes
+  nodes  <- V.freeze mnodes
+  let (net, _) = reduce $ toNet nodes
+  mnodes <- V.thaw $ _nodes net
+  scopeRemove mnodes
+  nodes  <- V.freeze mnodes
+  let (net, _) = reduceNoScop $ toNet nodes
+  mnodes <- V.thaw $ _nodes net
+  loopCut mnodes
+  nodes  <- V.freeze mnodes
+  let (net, _) = reduceNoScop $ toNet nodes
+  return (fromNodes $ _nodes net)
+
 churchTwo :: Anon
 churchTwo = LamA (LamA (AppA (VarA 1) (AppA (VarA 1) (VarA 0))))
 
 testCompile :: Net
-testCompile = compile churchTwo
+testCompile = compile (AppA churchTwo churchTwo)
+
+testReduce :: Net
+testReduce = fst $ reduce testCompile
+
+testDecompile :: Anon
+testDecompile = decompile testReduce
