@@ -232,3 +232,65 @@ primNames =
   , "fcopysign", "itrunc_s", "itrunc_u", "fconvert_s", "fconvert_u"
   , "ireinterpret", "freinterpret"
   ]
+
+--data PrimOpType = WW | DD | WD | DW
+
+--opType :: Prim -> PrimOpType
+--opType p = case p of
+--  I64_const -> WW
+--  F64_const -> DD
+--  I64_eqz   -> WW
+--  I64_eq    -> WW
+--  I64_ne    -> WW
+--  I64_lt_s  -> WW
+--  I64_lt_u  -> WW
+--  I64_gt_s  -> WW
+--  I64_gt_u  -> WW
+--  I64_le_s  -> WW
+--  I64_le_u  -> WW
+--  I64_ge_s  -> WW
+--  I64_ge_u  -> WW
+--  F64_eq    -> DD
+--  F64_ne    -> DD
+--  F64_lt    -> DD
+--  F64_gt    -> DD
+--  F64_le    -> DD
+--  F64_ge    -> DD
+--  I64_clz   -> WW
+--  I64_ctz   -> WW
+--  I64_popcnt -> WW
+--  I64_add    -> WW
+--  I64_sub    -> WW
+--  I64_mul    -> WW
+--  I64_div_s  -> WW
+--  I64_div_u  -> WW
+--  I64_rem_s  -> WW
+--  I64_rem_u  -> WW
+--  I64_and    -> WW
+--  I64_or     -> WW
+--  I64_xor    -> WW
+--  I64_shl    -> WW
+--  I64_shr_s  -> WW
+--  I64_shr_u  -> WW
+--  I64_rotl   -> WW
+--  I64_rotr   -> WW
+--  F64_abs    -> DD
+--  F64_neg    -> DD
+--  F64_ceil   -> DD
+--  F64_floor  -> DD
+--  F64_trunc  -> DD
+--  F64_nearest -> DD
+--  F64_sqrt    -> DD
+--  F64_add     -> DD
+--  F64_sub     -> DD
+--  F64_mul     -> DD
+--  F64_div     -> DD
+--  F64_min     -> DD
+--  F64_max      -> DD
+--  F64_copysign  -> DD
+--  I64_trunc_f64_s -> DD
+--  I64_trunc_f64_u
+--  F64_convert_i64_s
+--  F64_convert_i64_u
+--  I64_reinterpret_f64
+--  F64_reinterpret_i64

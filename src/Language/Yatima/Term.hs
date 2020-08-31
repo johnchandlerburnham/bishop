@@ -504,14 +504,14 @@ desaturate n l t = let (a,(nm,_)) = runState (go t) (init,1) in (a,nm)
       Var l n idx     -> bind n >> locs l >> return (VarA idx)
       Ref l n hsh     -> bind n >> locs l >> return (RefA hsh)
       Slf l n t       -> bind n >> locs l >> SlfA <$> go t
-      Eli l t         -> locs l >> EliA <$> go t
+      Eli l b         -> locs l >> EliA <$> go b
       Lam l n ut b    -> case ut of
         Just (u,t) -> bind n >> locs l >> LamA <$> (Just . (u,) <$> go t) <*> go b
         _          -> bind n >> locs l >> LamA Nothing <$> go b
       All l n u t b   -> bind n >> locs l >> AllA u <$> go t <*> go b
       Let l n u x t b -> bind n >> locs l >> LetA u <$> go x <*> go t <*> go b
       App l f a       -> locs l >> AppA <$> go f <*> go a
-      New l f a       -> locs l >> NewA <$> go f <*> go a
+      New l t b       -> locs l >> NewA <$> go t <*> go b
       Opr l o a b     -> locs l >> OprA o <$> go a <*> go b
       Ite l c t f     -> locs l >> IteA <$> go c <*> go t <*> go f
 
@@ -546,6 +546,8 @@ resaturate anon meta = fst $ runState (go anon) (meta,1)
       AllA u t b   -> nameLoc >>= \(n,l) -> All l n u <$> go t <*> go b
       LetA u x t b -> nameLoc >>= \(n,l) -> Let l n u <$> go x <*> go t <*> go b
       SlfA t       -> nameLoc >>= \(n,l) -> Slf l n <$> go t
+      NewA t b     -> nameLoc >>= \(n,l) -> New l   <$> go t <*> go b
+      EliA b       -> nameLoc >>= \(n,l) -> Eli l   <$> go b
       AppA f a     -> nameLoc >>= \(n,l) -> App l   <$> go f <*> go a
       OprA o a b   -> nameLoc >>= \(n,l) -> Opr l o <$> go a <*> go b
       IteA c t f   -> nameLoc >>= \(n,l) -> Ite l   <$> go c <*> go t <*> go f

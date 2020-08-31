@@ -23,6 +23,7 @@ import           System.Exit
 import           Text.Megaparsec            hiding (State)
 import           Text.Megaparsec.Char       hiding (space)
 import qualified Text.Megaparsec.Char.Lexer as L
+--import qualified Text.Megaparsec.Expr       as E
 
 import           Codec.Serialise
 import           Data.IPLD.CID              (CID)
@@ -120,6 +121,7 @@ pName = label "a name: \"someFunc\",\"somFunc'\",\"x_15\", \"_1\"" $ do
                     , "elim"
                     , "forall"
                     , "lambda"
+                    , "def"
                     ] ++ primNames
 
 -- | Consume whitespace, while skipping comments. Yatima line comments begin
@@ -193,7 +195,7 @@ pLam :: Int -> Parser Term
 pLam from = do
   from <- getOffset
   symbol "λ" <|> symbol "lambda"
-  bs   <- pBinders True <* space
+  bs   <- pBinders1 True False <* space
   symbol "=>"
   body <- bind (fst <$> bs) (pExpr False)
   upto <- getOffset
@@ -204,32 +206,45 @@ pAll :: Int -> Parser Term
 pAll from = do
   from <- getOffset
   symbol "∀" <|> symbol "forall"
-  bs   <- pBinders False <* space
+  bs   <- pBinders1 False True <* space
   symbol "->"
   body <- bind (fst <$> bs) (pExpr False)
   upto <- getOffset
   let loc = Loc from upto
   return $ foldAll loc body bs
 
-pBinder :: Bool -> Parser [(Name, Maybe (Uses, Term))]
-pBinder annOptional  = if annOptional then ann <|> unAnn else ann
+pBinder :: Bool -> Bool -> Parser [(Name, Maybe (Uses, Term))]
+pBinder annOptional namOptional = choice
+  [ ann
+  , if namOptional then unNam else empty
+  , if annOptional then unAnn else empty
+  ]
   where
-    unAnn = pure . (,Nothing) <$> pName
+    unNam = (\x -> [("", Just (Many, x))]) <$> pTerm
+    unAnn = (\x -> [(x , Nothing       )]) <$> pName
     ann = do
       symbol "("
       uses  <- pUses
-      names <- sepBy1 pName space
+      names <- sepEndBy1 pName space
       typ_  <- symbol ":" >> pExpr False
       string ")"
       return $ (,Just (uses,typ_)) <$> names
 
 -- | Parse a binding sequence @(0 A: Type) (1 x : A) (z : C)@
-pBinders :: Bool -> Parser [(Name, Maybe (Uses, Term))]
-pBinders annOpt = (try $ next) <|> (pBinder annOpt)
+pBinders1 :: Bool -> Bool -> Parser [(Name, Maybe (Uses, Term))]
+pBinders1 annOpt namOpt = (try $ next) <|> (pBinder annOpt namOpt)
   where
    next = do
-     b  <- pBinder annOpt <* space
-     bs <- bind (fst <$> b) $ pBinders annOpt
+     b  <- pBinder annOpt namOpt <* space
+     bs <- bind (fst <$> b) $ pBinders annOpt namOpt
+     return $ b ++ bs
+
+pBinders :: Bool -> Bool -> Parser [(Name, Maybe (Uses, Term))]
+pBinders annOpt namOpt = (try $ next) <|> return []
+  where
+   next = do
+     b  <- pBinder annOpt namOpt <* space
+     bs <- bind (fst <$> b) $ pBinders annOpt namOpt
      return $ b ++ bs
 
 -- | Parse a self-type: @\@self body@
@@ -246,7 +261,7 @@ pSlf from = do
 pNew :: Int -> Parser Term
 pNew from = do
   symbol "new"
-  typ_ <- pTerm
+  typ_ <- pTerm <* space
   body <- pExpr False
   upto <- getOffset
   return $ New (Loc from upto) typ_ body
@@ -307,8 +322,8 @@ pOpr from = do
 
 pDecl :: Int -> Parser (Name, Term, Term)
 pDecl from = do
-  nam <- pName <* space
-  bs   <- pBinders False <* space
+  nam     <- pName <* space
+  bs      <- pBinders False False <* space
   typBody <- symbol ":" >> bind (fst <$> bs) (pExpr False)
   typUpto <- getOffset
   let typ = foldAll (Loc from typUpto) typBody bs
@@ -348,7 +363,7 @@ pVar from = label "a local or global reference: \"x\", \"add\"" $ do
 pTerm :: Parser Term
 pTerm = do
   from <- getOffset
-  t <- choice
+  choice
     [ pTyp from
     , pI64 from
     , pF64 from
@@ -363,11 +378,6 @@ pTerm = do
     , pAll from
     , pExpr True
     , pVar from
-    ]
-  choice
-    [ --try $ pArr from t
-    --, 
-    return t
     ]
 
 -- | Parse an unquantified function arrow: @A -> B@
@@ -385,7 +395,7 @@ pExpr parens = do
   from <- getOffset
   when parens (void $ symbol "(")
   fun  <- pTerm <* space
-  args <- sepEndBy pTerm space
+  args <- sepEndBy (try $ pTerm) space
   when parens (void $ string ")")
   upto <- getOffset
   return $ foldl (\t a -> App (Loc from upto) t a) fun args
@@ -418,20 +428,14 @@ pDefs = (try $ space >> next) <|> end
     ds@(Defs index cache) <- asks _defs
     DefDeref comm termAnon termMeta typeAnon typeMeta <- pDef
     let defName = (_names termMeta) IM.! 0
-    let docCID     = makeCID comm
     let termAnonCID = makeCID termAnon :: CID
-    let termMetaCID = makeCID termMeta :: CID
     let typeAnonCID = makeCID typeAnon :: CID
-    let typeMetaCID = makeCID typeMeta :: CID
-    let def         = Def docCID termAnonCID termMetaCID typeAnonCID typeMetaCID
+    let def         = Def comm termAnonCID termMeta typeAnonCID typeMeta
     let defCID      = makeCID def
     let index'      = M.insert defName defCID index
     let cache'      = M.insert defCID      (serialise def)  $
                       M.insert typeAnonCID (serialise typeAnon) $
-                      M.insert typeMetaCID (serialise typeMeta) $
                       M.insert termAnonCID (serialise termAnon) $
-                      M.insert termMetaCID (serialise termMeta) $
-                      M.insert docCID      (serialise comm) $
                       cache
     local (\e -> e { _defs = Defs index' cache' }) pDefs
 

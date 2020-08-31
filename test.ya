@@ -1,27 +1,26 @@
-testDef(A: Type): Type {
-  A
-}
 
-testLet : Type {
-  let 1 x: Type = Type;
+def id (0 A: Type) (x: A) : A = x
+
+def selfRef : Type = selfRef
+
+def testDef (0 A : Type) (x: A) : Type = Type
+
+def testLet : Type =
+  let   id  (0 A: Type) (x: A) : A = x;
+  let 1 id1 (0 A: Type) (x: A) : A = x;
   Type
-}
 
-id<A>(x:A): A { x }
+def Bool : Type
+  = @self
+    ∀ (0 P: ∀ Bool -> Type)
+      (t  : P (λ P t f => t))
+      (f  : P (λ P t f => f))
+    -> P self
 
-//selfRef : Type {
-//  selfRef
-//}
+def true  : Bool = new Bool λ P t f => t
+def false : Bool = new Bool λ P t f => f
 
-mkBool<B>(t:B, f:B): Type {
-  @self
-  (ght P: B -> Type, t: P t, f: P f) -> P self
-}
+def testPrim : I64 = id I64 (#iadd 2 2)
 
-testPrim : I64 {
-  id I64 (#iadd 2 2)
-}
+def testRedex : I64 = (λ x => (#iadd 2 x)) 1
 
-testRed : I64 {
-  ((x: I64) => (#iadd 2 x)) 1
-}

@@ -35,12 +35,12 @@ library
       Language.Yatima.IPFS
       Language.Yatima.GHC.Eval
       Language.Yatima.GHC.Check
-      Language.Yatima.Bishop.Net
   other-modules:
       Language.Bishop.Eval
       Language.Bishop.Net
       Language.Bishop.Parse
       Language.Bishop.Term
+      Language.Yatima.Bishop.Net
       Paths_yatima
   hs-source-dirs:
       src
