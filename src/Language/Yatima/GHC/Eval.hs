@@ -13,6 +13,7 @@ module Language.Yatima.GHC.Eval where
 
 import           Control.Monad.ST
 import           Control.Monad.ST.UnsafePerform
+import           Control.Monad.Except
 
 import           Data.IntMap                    (IntMap)
 import qualified Data.IntMap                    as IM
@@ -56,7 +57,8 @@ data HOAS where
   I64H :: Loc -> HOAS
   DblH :: Loc -> Double -> HOAS
   F64H :: Loc -> HOAS
-  OprH :: Loc -> Prim -> HOAS -> HOAS -> HOAS
+  Op1H :: Loc -> Prim1 -> HOAS -> HOAS
+  Op2H :: Loc -> Prim2 -> HOAS -> HOAS -> HOAS
   IteH :: Loc -> HOAS -> HOAS -> HOAS -> HOAS
 
   FixH :: Loc -> Name -> (HOAS -> HOAS) -> HOAS
@@ -88,7 +90,8 @@ toHOAS t ctx dep = case t of
   Dbl l d         -> DblH l d
   I64 l           -> I64H l
   F64 l           -> F64H l
-  Opr l p a b     -> OprH l p (go a) (go b)
+  Op1 l p a       -> Op1H l p (go a)
+  Op2 l p a b     -> Op2H l p (go a) (go b)
   Ite l c t f     -> IteH l (go c) (go t) (go f)
   where
     bind x t = toHOAS t (x:ctx) (dep + 1)
@@ -112,7 +115,8 @@ fromHOAS t dep = case t of
   DblH l d         -> Dbl l d
   I64H l           -> I64 l
   F64H l           -> F64 l
-  OprH l p a b     -> Opr l p (go a) (go b)
+  Op1H l p a       -> Op1 l p (go a)
+  Op2H l p a b     -> Op2 l p (go a) (go b)
   IteH l c t f     -> Ite l (go c) (go t) (go f)
   where
     go t       = fromHOAS t dep
@@ -141,23 +145,34 @@ reduce t ds = case t of
   AppH l f a       -> case go f of
     LamH _ _ _ b -> go (b a)
     x            -> AppH l f a
-
   LetH _ n u t d b -> go (b d)
-  OprH _ p a b     -> case (go a, go b) of
-    (WrdH _ x,WrdH _ y) -> maybe t unPrim (op p (W x) (W y))
-    (WrdH _ x,DblH _ y) -> maybe t unPrim (op p (W x) (D y))
-    (DblH _ x,WrdH _ y) -> maybe t unPrim (op p (D x) (W y))
-    (DblH _ x,DblH _ y) -> maybe t unPrim (op p (D x) (D y))
-    _               -> t
+  Op1H l p a       -> case (prim1Type p, go a) of
+    (IUna, WrdH _ a) -> WrdH noLoc (opIUna p a)
+    (ICnv, DblH l a) -> either
+      (\ _ -> Op1H noLoc p (DblH l a))
+      (\ x -> WrdH noLoc x)
+      (runExcept $ opICnv p a)
+    (FUna, DblH _ a) -> DblH noLoc (opFUna p a)
+    (FCnv, WrdH l a) -> DblH noLoc (opFCnv p a)
+    (_   , a       ) -> Op1H l p a
+  -- Op2 is uncurried. This simplifies the WASM operations, and curried forms of
+  -- the binary operations can be created at the language layer with `Lam`
+  Op2H l p a b     -> case (prim2Type p, go a, go b) of
+    (IRel, WrdH _ a, WrdH _ b) -> WrdH noLoc (opIRel p a b)
+    (IBin, WrdH la a, WrdH lb b) -> either
+      (\ _ -> Op2H noLoc p (WrdH la a) (WrdH lb b))
+      (\ x -> WrdH noLoc x)
+      (runExcept $ opIBin p a b)
+    (FRel, DblH _ a, DblH _ b) -> WrdH noLoc (opFRel p a b)
+    (FBin, DblH _ a, DblH _ b) -> DblH noLoc (opFBin p a b)
+    (_   ,        a,        b) -> Op2H l p a b
   IteH l c t f     -> case go c of
     WrdH _ 0 -> go f
     WrdH _ _ -> go t
-    _      -> IteH l c t f
-  _              -> t
+    _        -> IteH l c t f
+  _                -> t
   where
     go x = reduce x ds
-    unPrim (W x) = WrdH noLoc x
-    unPrim (D x) = DblH noLoc x
 
 reduceName :: Name -> Defs -> Maybe Term
 reduceName name ds = do
@@ -199,7 +214,8 @@ normalize term defs = runST (top $ term)
                  bind <- go t seen
                  return $ AllH l n u bind (\x -> unsafePerformST $ go (b x) seen)
                AppH l f a       -> AppH l <$> (go f seen) <*> (go a seen)
-               OprH l p x y     -> OprH l p <$> (go x seen) <*> (go y seen)
+               Op1H l p x       -> Op1H l p <$> (go x seen)
+               Op2H l p x y     -> Op2H l p <$> (go x seen) <*> (go y seen)
                IteH l c t f     ->
                  IteH l <$> (go c seen) <*> (go t seen) <*> (go f seen)
                _                -> return $ norm

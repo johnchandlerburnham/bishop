@@ -90,7 +90,11 @@ equal a b defs dep = runST $ top a b dep
                  return $ type_eq && body_eq
                (EliH _ ab, EliH _ bb) -> go ab bb dep seen
                (FixH _ _ ab, FixH _ _ bb) -> go (ab a1) (bb b1) (dep+1) seen
-               (OprH _ ap ax ay, OprH _ bp bx by) -> do
+               (Op1H _ ap ax, Op1H _ bp bx) -> do
+                 let prim_eq = ap == bp
+                 argx_eq <- go ax bx dep seen
+                 return $ prim_eq && argx_eq
+               (Op2H _ ap ax ay, Op2H _ bp bx by) -> do
                  let prim_eq = ap == bp
                  argx_eq <- go ax bx dep seen
                  argy_eq <- go ay by dep seen
@@ -111,6 +115,8 @@ data CheckErr
   | NewNonSelfType Loc Ctx HOAS HOAS
   | EliNonSelfType Loc Ctx HOAS HOAS
   | CantInferNonAnnotatedLambda Loc Ctx HOAS
+  | Prim1TypeError Loc Ctx Prim1 PrimType HOAS
+  | Prim2TypeError Loc Ctx Prim2 PrimType HOAS HOAS
   | CustomErr Loc Ctx Text
   deriving Show
 
@@ -235,12 +241,38 @@ infer linear ctx rho term defs =
           when (if linear then pi' /= pi else pi' ># pi)
             (throwError (QuantityMismatch loc ctx linear pi' pi))
           return (multiplyCtx rho (addCtx ctx ctx'), typ)
-
     -- TODO
     FixH l n b   -> undefined
-    OprH l _ _ _ -> undefined
-    IteH l _ _ _ -> undefined
-
+    Op1H l p a   -> case prim1Type p of
+      IUna -> check linear ctx Zero a (I64H noLoc) defs >> return (ctx, I64H noLoc)
+      ICnv -> check linear ctx Zero a (F64H noLoc) defs >> return (ctx, I64H noLoc)
+      FUna -> check linear ctx Zero a (F64H noLoc) defs >> return (ctx, F64H noLoc)
+      FCnv -> check linear ctx Zero a (I64H noLoc) defs >> return (ctx, F64H noLoc)
+      x    -> throwError (Prim1TypeError l ctx p x a)
+    Op2H l p a b -> case prim2Type p of
+      IRel -> do
+        check linear ctx Zero a (I64H noLoc) defs
+        check linear ctx Zero b (I64H noLoc) defs
+        return (ctx, I64H noLoc)
+      IBin -> do
+        check linear ctx Zero a (I64H noLoc) defs
+        check linear ctx Zero b (I64H noLoc) defs
+        return (ctx, I64H noLoc)
+      FRel -> do
+        check linear ctx Zero a (F64H noLoc) defs
+        check linear ctx Zero b (F64H noLoc) defs
+        return (ctx, I64H noLoc)
+      FBin -> do
+        check linear ctx Zero a (F64H noLoc) defs
+        check linear ctx Zero b (F64H noLoc) defs
+        return (ctx, F64H noLoc)
+      x    -> throwError (Prim2TypeError l ctx p x a b)
+    -- Add return type annotation to Ite?
+    IteH l c t f -> do
+      check linear ctx Zero c (I64H noLoc) defs
+      (ctx, tt) <- infer linear ctx Zero t defs
+      check linear ctx Zero f tt defs
+      return (ctx, tt)
 --
 --checkExpr :: Bool -> Expr -> Module -> Except CheckErr ()
 --checkExpr linear (Expr n typ trm) mod = do

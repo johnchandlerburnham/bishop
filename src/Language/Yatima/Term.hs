@@ -132,9 +132,12 @@ data Term where
   Dbl :: Loc -> Double -> Term
   -- | The type of floats
   F64 :: Loc -> Term
-  -- | Primitive operations on words and floats defined in
+  -- | Primitive unary operations on words and floats defined in
   -- "Language.Yatima.Prim", designed to match WASM arithmetic operations
-  Opr :: Loc -> Prim -> Term -> Term -> Term
+  Op1 :: Loc -> Prim1 -> Term -> Term
+  -- | Primitive binary operations on words and floats defined in
+  -- "Language.Yatima.Prim", designed to match WASM arithmetic operations
+  Op2 :: Loc -> Prim2 -> Term -> Term -> Term
   -- | Primitive if-then-else on Words, this is necessary to allow the
   -- "Language.Yatima.Net" interaction net runtime to branch on words
   Ite :: Loc -> Term -> Term -> Term -> Term
@@ -167,7 +170,8 @@ prettyTerm t = go t
       Dbl _ d         -> T.pack (show d)
       I64 _           -> "i64"
       F64 _           -> "f64"
-      Opr _ o a b     -> T.concat ["(", prettyPrim o, " ", go a, " ", go b, ")"]
+      Op1 _ o a       -> T.concat ["(#", prim1Name o, " ", go a,")"]
+      Op2 _ o a b     -> T.concat ["(#", prim2Name o, " ", go a, " ", go b, ")"]
       Ite _ c t f     -> T.concat ["if ", go c, " then ", go t, " else ", go f]
 
     lams :: Name -> Maybe (Uses, Term) -> Term -> Text
@@ -218,7 +222,8 @@ data Anon where
   DblA :: Double -> Anon
   I64A :: Anon
   F64A :: Anon
-  OprA :: Prim -> Anon -> Anon -> Anon
+  Op1A :: Prim1 -> Anon -> Anon
+  Op2A :: Prim2 -> Anon -> Anon -> Anon
   IteA :: Anon -> Anon -> Anon -> Anon
 
 -- | This encoding is designed to match the
@@ -235,7 +240,8 @@ data Anon where
 -- > const F64 = ()                    => ({$0:"F64"})
 -- > const Wrd = (word)                => ({$0:"Wrd",$1:word})
 -- > const Dbl = (word)                => ({$0:"Dbl",$1:word})
--- > const Opr = (prim, argx, argy)    => ({$0:"Opr",$1:prim,$2:argx,$3:argy});
+-- > const Op1 = (prim, argx, argy)    => ({$0:"Op1",$1:prim,$2:argx});
+-- > const Op2 = (prim, argx, argy)    => ({$0:"Op2",$1:prim,$2:argx,$3:argy});
 -- > const Ite = (cond, btru, bfls)    => ({$0:"Ite",$1:cond,$2:btru,$3:bfls});
 -- > const All = ()                    => ({$0:"All",$1:uses,$2:type,$3:body});
 -- > const Slf = (body)                => ({$0:"Slf",$1:body})
@@ -284,8 +290,12 @@ encodeAnon term = case term of
                           <> (encodeString "$1" <> encodeInt (fromEnum use))
                           <> (encodeString "$2" <> encodeAnon typ)
                           <> (encodeString "$3" <> encodeAnon bdy)
-  OprA opr arx ary     -> encodeMapLen 4
-                          <> (encodeString "$0" <> encodeString "Opr")
+  Op1A opr arx         -> encodeMapLen 3
+                          <> (encodeString "$0" <> encodeString "Op1")
+                          <> (encodeString "$1" <> encodeInt (fromEnum opr))
+                          <> (encodeString "$2" <> encodeAnon arx)
+  Op2A opr arx ary     -> encodeMapLen 4
+                          <> (encodeString "$0" <> encodeString "Op2")
                           <> (encodeString "$1" <> encodeInt (fromEnum opr))
                           <> (encodeString "$2" <> encodeAnon arx)
                           <> (encodeString "$3" <> encodeAnon ary)
@@ -337,8 +347,11 @@ decodeUses = toEnum <$> decodeInt
 
 -- | `Prim` is an `Enum` instance, but we define a separate decoding function
 -- for convenience.
-decodePrim :: Decoder s Prim
-decodePrim = toEnum <$> decodeInt
+decodePrim1 :: Decoder s Prim1
+decodePrim1 = toEnum <$> decodeInt
+
+decodePrim2 :: Decoder s Prim2
+decodePrim2 = toEnum <$> decodeInt
 
 decodeMaybeTyp :: Decoder s (Maybe (Uses, Anon))
 decodeMaybeTyp = do
@@ -373,7 +386,7 @@ decodeAnon = do
         "Wrd" -> WrdA <$> decodeField "Wrd" "$1" decodeWord64
         "Dbl" -> DblA <$> decodeField "Dbl" "$1" decodeDouble
     3 -> do
-      ctor <- decodeCtor "Anon" "$0" ["App", "New", "Lam"]
+      ctor <- decodeCtor "Anon" "$0" ["App", "New", "Lam"," Op1"]
       case ctor of
         "App" -> AppA <$> decodeField "App" "$1" decodeAnon
                       <*> decodeField "App" "$2" decodeAnon
@@ -381,15 +394,17 @@ decodeAnon = do
                       <*> decodeField "New" "$2" decodeAnon
         "Lam" -> LamA <$> decodeField "Lam" "$1" decodeMaybeTyp
                       <*> decodeField "Lam" "$2" decodeAnon
+        "Op1" -> Op1A <$> decodeField "Op1" "$1" decodePrim1
+                      <*> decodeField "Op1" "$2" decodeAnon
     4 -> do
-      ctor <- decodeCtor "Anon" "$0" ["All", "Opr", "Ite"]
+      ctor <- decodeCtor "Anon" "$0" ["All", "Op2", "Ite"]
       case ctor of
         "All" -> AllA <$> decodeField "All" "$1" decodeUses
                       <*> decodeField "All" "$2" decodeAnon
                       <*> decodeField "All" "$3" decodeAnon
-        "Opr" -> OprA <$> decodeField "Opr" "$1" decodePrim
-                      <*> decodeField "Opr" "$2" decodeAnon
-                      <*> decodeField "Opr" "$3" decodeAnon
+        "Op2" -> Op2A <$> decodeField "Op2" "$1" decodePrim2
+                      <*> decodeField "Op2" "$2" decodeAnon
+                      <*> decodeField "Op2" "$3" decodeAnon
         "Ite" -> IteA <$> decodeField "Ite" "$1" decodeAnon
                       <*> decodeField "Ite" "$2" decodeAnon
                       <*> decodeField "Ite" "$3" decodeAnon
@@ -512,7 +527,8 @@ desaturate n l t = let (a,(nm,_)) = runState (go t) (init,1) in (a,nm)
       Let l n u x t b -> bind n >> locs l >> LetA u <$> go x <*> go t <*> go b
       App l f a       -> locs l >> AppA <$> go f <*> go a
       New l t b       -> locs l >> NewA <$> go t <*> go b
-      Opr l o a b     -> locs l >> OprA o <$> go a <*> go b
+      Op1 l o a       -> locs l >> Op1A o <$> go a
+      Op2 l o a b     -> locs l >> Op2A o <$> go a <*> go b
       Ite l c t f     -> locs l >> IteA <$> go c <*> go t <*> go f
 
 -- TODO: Quickcheck the rename . uname  = id property
@@ -549,6 +565,7 @@ resaturate anon meta = fst $ runState (go anon) (meta,1)
       NewA t b     -> nameLoc >>= \(n,l) -> New l   <$> go t <*> go b
       EliA b       -> nameLoc >>= \(n,l) -> Eli l   <$> go b
       AppA f a     -> nameLoc >>= \(n,l) -> App l   <$> go f <*> go a
-      OprA o a b   -> nameLoc >>= \(n,l) -> Opr l o <$> go a <*> go b
+      Op1A o a     -> nameLoc >>= \(n,l) -> Op1 l o <$> go a
+      Op2A o a b   -> nameLoc >>= \(n,l) -> Op2 l o <$> go a <*> go b
       IteA c t f   -> nameLoc >>= \(n,l) -> Ite l   <$> go c <*> go t <*> go f
       RefA cid     -> nameLoc >>= \(n,l) -> return $ Ref l n cid

@@ -122,7 +122,7 @@ pName = label "a name: \"someFunc\",\"somFunc'\",\"x_15\", \"_1\"" $ do
                     , "forall"
                     , "lambda"
                     , "def"
-                    ] ++ primNames
+                    ] ++ prim1Names ++ prim2Names
 
 -- | Consume whitespace, while skipping comments. Yatima line comments begin
 -- with @//@, and block comments are bracketed by @*/@ and @*/@ symbols.
@@ -305,20 +305,32 @@ pIte from = do
   f <- pTerm
   upto <- getOffset
   return $ Ite (Loc from upto) c t f
---
+
 -- | Parse a `Prim` numeric operation defined in "Language.Yatima.Prim"
-pPrim :: Parser Prim
-pPrim = choice $ zipWith (\x y -> string x >> return (toEnum y)) primNames [0..]
+pPrim1 :: Parser Prim1
+pPrim1 = choice $ (\(p,_,_,s) -> string s >> return p) <$> prim1s
+
+pPrim2 :: Parser Prim2
+pPrim2 = choice $ (\(p,_,_,s) -> string s >> return p) <$> prim2s
 
 -- | Parse a primitive numeric operation
-pOpr :: Int -> Parser Term
-pOpr from = do
+pOp1 :: Int -> Parser Term
+pOp1 from = do
   string "#"
-  p <- pPrim <* space
-  a <- pTerm <* space
+  p <- pPrim1 <* space
+  a <- pTerm
+  upto <- getOffset
+  return $ Op1 (Loc from upto) p a
+
+-- | Parse a primitive numeric operation
+pOp2 :: Int -> Parser Term
+pOp2 from = do
+  string "#"
+  p <- pPrim2 <* space
+  a <- pTerm  <* space
   b <- pTerm
   upto <- getOffset
-  return $ Opr (Loc from upto) p a b
+  return $ Op2 (Loc from upto) p a b
 
 pDecl :: Int -> Parser (Name, Term, Term)
 pDecl from = do
@@ -371,7 +383,8 @@ pTerm = do
     , pSlf from
     , pNew from
     , pEli from
-    , pOpr from
+    , pOp1 from
+    , pOp2 from
     , pIte from
     , pLet from
     , pLam from
