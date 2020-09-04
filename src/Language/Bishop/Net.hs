@@ -1,12 +1,18 @@
 module Language.Bishop.Net where
 
+import           Control.Monad
+import           Control.Monad.ST
+import           Data.STRef
 import           Control.Monad.State.Strict
 import           Data.List                  (intercalate)
 import           Data.Char                  (ord,chr)
 import           Data.Set                   (Set)
 import qualified Data.Set                   as Set
 import           Data.Bits
-import qualified Data.Vector.Unboxed        as V
+import           Data.Vector.Unboxed         (Vector)
+import qualified Data.Vector.Unboxed         as V
+import           Data.Vector.Unboxed.Mutable (MVector)
+import qualified Data.Vector.Unboxed.Mutable as MV
 import           Data.Word
 import           Text.Printf (PrintfArg, printf)
 import           Numeric     (showHex)
@@ -85,24 +91,24 @@ showNode :: (Integer, Node) -> String
 showNode (x, (i,m,l,r)) = show x ++ ": " ++ case readInfoBits i of
   (Info True _ _ _ _ _ _)         -> "FREE"
   (Info False _ lS _ Init _ _)    -> "Init " ++ showPort lS l
-  (Info False mS lS rS Appl _ _)  -> concat 
+  (Info False mS lS rS Appl _ _)  -> concat
     ["Appl @ ", showPort mS m, showPort lS l, showPort rS r]
   (Info False mS lS rS Abst v _)  -> concat
     ["Abst ", ['λ', (chr $ fromIntegral v), ' '], showPort mS m, showPort lS l, showPort rS r]
   (Info False mS lS rS Dupl _ v)  -> concat
     ["Dupl let ", showHex v "" ," ",showPort mS m,showPort lS l,showPort rS r]
-  (Info False mS lS _ Scop _ v)  -> concat 
+  (Info False mS lS _ Scop _ v)  -> concat
     ["Scop ( ", showHex v "" , " ",showPort mS m, showPort lS l]
   --(Info False mS lS rS Word _ _)  -> concat
   --  ["Word ", showPort mS m ++ "=" ++ showHex l ""]
-  --(Info False mS lS rS Oper v _)  -> concat 
+  --(Info False mS lS rS Oper v _)  -> concat
   --  ["Oper ", showPort mS m, showPort lS l, showPort rS r, "=", showHex v ""]
 
-  --(Info mS lS rS k) -> concat 
+  --(Info mS lS rS k) -> concat
   --  [showHex x "",":",show k,"_",showPort mS m,showPort lS l,showPort rS r]
 
 data Net = Net
-  { _nodes :: V.Vector Node
+  { _nodes :: Vector Node
   , _freed :: [Word64]
   , _redex :: [(Word64,Word64)]
   }
@@ -116,10 +122,61 @@ instance Show Net where
       , "REDEX:", show rs
       ]
 
+-- Mutable version of Net
+data NetS s = NetS
+  { _nodesS :: STRef s (MVector s Node)
+  , _freedS :: STRef s [Word64]
+  , _redexS :: STRef s [(Word64,Word64)]
+  }
+
+-- Conversion between mutable and immutable nets
+freezeNet :: NetS s -> ST s Net
+freezeNet (NetS nodes freed redex) = do
+  nodes' <- readSTRef nodes >>= V.freeze
+  freed' <- readSTRef freed
+  redex' <- readSTRef redex
+  return $ Net nodes' freed' redex'
+
+thawNet :: Net -> ST s (NetS s)
+thawNet (Net nodes freed redex) = do
+  nodes' <- V.thaw nodes >>= newSTRef
+  freed' <- newSTRef freed
+  redex' <- newSTRef redex
+  return $ NetS nodes' freed' redex'
+
+-- Getters, setters and modifiers for NetS
+getNode net pos      = do
+  nodes <- readSTRef $ _nodesS net
+  MV.read nodes (fromEnum pos)
+setNode net pos node = do
+  nodes <- readSTRef $ _nodesS net
+  MV.write nodes (fromEnum pos) node
+modifyNode net pos f = do
+  nodes <- readSTRef $ _nodesS net
+  MV.modify nodes f (fromEnum pos)
+
+getNodes    = readSTRef    . _nodesS
+setNodes    = writeSTRef   . _nodesS
+modifyNodes = modifySTRef' . _nodesS
+
+getFreed    = readSTRef    . _freedS
+setFreed    = writeSTRef   . _freedS
+modifyFreed = modifySTRef' . _freedS
+
+getRedex    = readSTRef    . _redexS
+setRedex    = writeSTRef   . _redexS
+modifyRedex = modifySTRef' . _redexS
+
+growNodes :: NetS s -> Int -> ST s ()
+growNodes net l = do
+  nodes  <- readSTRef $ _nodesS net
+  nodes' <- MV.grow nodes l
+  writeSTRef (_nodesS net) nodes'
+  
 isLoc :: Integral a => a -> Bool
 isLoc x = (mod x 4) == 0
 
-findRedexes :: V.Vector Node -> [(Word64, Word64)]
+findRedexes :: Vector Node -> [(Word64, Word64)]
 findRedexes vs = Set.toList $ V.ifoldr insertRedex Set.empty vs
   where
     insertRedex :: Int -> Node -> Set (Word64, Word64) -> Set (Word64, Word64)
@@ -135,186 +192,166 @@ findRedexes vs = Set.toList $ V.ifoldr insertRedex Set.empty vs
         where
          (b',m',l',r')  = vs V.! (fromIntegral m)
 
---testNodes :: [Node]
---testNodes =
---  [ mkAppl (L,1) (L,2) (L,3)
---  , mkInit (M,0)
---  , mkInit (L,0)
---  , mkInit (R,0)
---  ]
-
-makeNet :: [Node] -> Net
-makeNet nodes = let vs = V.fromList nodes in Net vs [] (findRedexes vs)
-
-
-isFreed :: Word64 -> State Net Bool
-isFreed i = do
-  f <- gets _freed
-  return $ i `elem` f
-
-getNode :: Word64 -> State Net Node
-getNode i = (\vs -> vs V.! (fromIntegral i)) <$> gets _nodes
-
-getPort :: Slot -> Node -> (Slot, Word64)
-getPort s (b,m,l,r) =
+isFreed :: NetS s -> Word64 -> ST s Bool
+isFreed net i = do
+  freed <- getFreed net
+  return $ i `elem` freed
+  
+portDest :: Slot -> Node -> (Slot, Word64)
+portDest s (b,m,l,r) =
   let i = readInfoBits b in
   case s of
     M ->  (_mainSlot i,m)
     L ->  (_leftSlot i,l)
     R ->  (_rigtSlot i,r)
 
-enterPort :: (Slot, Word64) -> State Net (Slot,Word64)
-enterPort (s, n) = do
-  node <- getNode n
-  return $ (getPort s node)
+getPort :: NetS s -> (Slot, Word64) -> ST s (Slot,Word64)
+getPort net (s, n) = do
+  node <- getNode net n
+  return $ portDest s node
 
-setSlot :: Node -> Slot -> (Slot, Word64) -> Node
-setSlot node@(b,m,l,r) x (s,n)  =
+substSlot :: Node -> Slot -> (Slot, Word64) -> Node
+substSlot node@(b,m,l,r) x (s,n)  =
   let i = readInfoBits b in
   case x of
     M -> (infoBits $ i { _mainSlot = s }, n, l, r)
     L -> (infoBits $ i { _leftSlot = s }, m, n, r)
     R -> (infoBits $ i { _rigtSlot = s }, m, l, n)
 
-setPort :: Slot -> Word64 -> (Slot,Word64) -> State Net ()
-setPort s i port = do
-  node <- ((\x -> x V.! (fromIntegral i)) <$> gets _nodes)
-  modify $ \n ->
-    n { _nodes = (_nodes n) V.// [(fromIntegral i, (setSlot node s port))] }
+setPort :: NetS s -> Slot -> Word64 -> (Slot,Word64) -> ST s ()
+setPort net s i port = do
+  node <- getNode net i
+  setNode net i (substSlot node s port)
 
-linkPorts :: (Slot,Word64) -> (Slot, Word64) -> State Net ()
-linkPorts (sa,ia) (sb,ib) = do
-  setPort sa ia $ (sb,ib)
-  setPort sb ib $ (sa,ia)
+linkPorts :: NetS s -> (Slot,Word64) -> (Slot, Word64) -> ST s ()
+linkPorts net (sa,ia) (sb,ib) = do
+  setPort net sa ia (sb,ib)
+  setPort net sb ib (sa,ia)
   when (sa == M && sb == M) $
-   modify (\n -> n { _redex = (ia, ib) : _redex n })
+    modifyRedex net ((ia,ib) :)
 
-unlinkPort :: (Slot,Word64) -> State Net ()
-unlinkPort (sa,ia) = do
-  (sb,ib) <- enterPort (sa,ia)
-  (sa',ia') <- enterPort (sb,ib)
-  if (ia' == ia && sa' == sa) then do
-      setPort sa ia (sa,ia)
-      setPort sb ib (sb,ib)
-    else return ()
+unlinkPort :: NetS s -> (Slot,Word64) -> ST s ()
+unlinkPort net (sa,ia) = do
+  (sb,ib)   <- getPort net (sa,ia)
+  (sa',ia') <- getPort net (sb,ib)
+  when (ia' == ia && sa' == sa)
+    (setPort net sa ia (sa,ia) >>
+     setPort net sb ib (sb,ib))
 
-freeNode :: Word64 -> State Net ()
-freeNode idx = do
-  nodes <- gets _nodes
-  case nodes V.!? (fromIntegral idx) of 
-    Nothing -> return ()
-    Just (i,m,l,r)  -> do
-      let (Info _ mS lS lR k meta lvl) = (readInfoBits i)
-      let i' = infoBits (Info True mS lS lR k meta lvl)
-      modify (\n ->
-        n { _nodes = (_nodes n) V.// [(fromIntegral idx,(i',idx,idx,idx))]
-          , _freed = idx:(_freed n)
-          })
+freeNode :: NetS s -> Word64 -> ST s ()
+freeNode net idx = do
+  (i,m,l,r) <- getNode net idx
+  let (Info _ mS lS lR k meta lvl) = readInfoBits i
+  let i' = infoBits (Info True mS lS lR k meta lvl)
+  setNode net idx (i',idx,idx,idx)
+  modifyFreed net (idx :)
 
-allocNode :: Info -> State Net Word64
-allocNode info = do
-  (Net vs fs rs) <- get
+allocNode :: NetS s -> Info -> ST s Word64
+allocNode net info = do
+  fs <- getFreed net
   let node i = (infoBits info, i, i, i)
   case fs of
     [] -> do
-      let i = fromIntegral (V.length vs)
-      modify (\n -> n { _nodes = vs `V.snoc` (node i)})
+      nodes <- getNodes net
+      let i = toEnum (MV.length nodes)
+      growNodes net 1
+      setNode net i (node i)
       return i
     (f:fs) -> do
-      modify (\n -> n { _nodes = vs V.// [(fromIntegral f,node f)], _freed = fs})
+      setNode net f (node f)
+      setFreed net fs
       return f
 
--- Reduction Rules
+-- -- Reduction Rules
 
-annihilate :: (Word64, Word64) -> State Net ()
-annihilate (iA,iB)
+annihilate :: NetS s -> (Word64, Word64) -> ST s ()
+annihilate net (iA,iB)
   | iA == iB = do
-      aLdest <- enterPort (L,iA)
-      aRdest <- enterPort (R,iA)
-      linkPorts aLdest aLdest
-      linkPorts aRdest aRdest
+      aLdest <- getPort net (L,iA)
+      aRdest <- getPort net (R,iA)
+      linkPorts net aLdest aLdest
+      linkPorts net aRdest aRdest
       return ()
   | otherwise = do
-      aLdest <- enterPort (L,iA)
-      bRdest <- enterPort (R,iB)
-      linkPorts aLdest bRdest
-      aRdest <- enterPort (R,iA)
-      bLdest <- enterPort (L,iB)
-      linkPorts aRdest bLdest
+      aLdest <- getPort net (L,iA)
+      bLdest <- getPort net (L,iB)
+      linkPorts net aLdest bLdest
+      aRdest <- getPort net (R,iA)
+      bRdest <- getPort net (R,iB)
+      linkPorts net aRdest bRdest
       return ()
 
-annihilateScop :: (Word64, Word64) -> State Net ()
-annihilateScop (iA,iB) 
+annihilateScop :: NetS s -> (Word64, Word64) -> ST s ()
+annihilateScop net (iA,iB)
   | iA == iB = do
-      aLdest <- enterPort (L,iA)
-      linkPorts aLdest aLdest
+      aLdest <- getPort net (L,iA)
+      linkPorts net aLdest aLdest
       return ()
   | otherwise = do
-      aLdest <- enterPort (L,iA)
-      bLdest <- enterPort (L,iB)
-      linkPorts aLdest bLdest
+      aLdest <- getPort net (L,iA)
+      bLdest <- getPort net (L,iB)
+      linkPorts net aLdest bLdest
       return ()
 
-beta :: (Word64, Word64) -> State Net ()
-beta (iAbst, iAppl) = do
+beta :: NetS s -> (Word64, Word64) -> ST s ()
+beta net (iAbst, iAppl) = do
   traceM $ "beta: " ++  concat [show iAbst, ", ", show iAppl]
-  abstLDest  <- enterPort (L,iAbst)
-  abstRDest  <- enterPort (R,iAbst)
-  applLDest  <- enterPort (L,iAppl)
-  applRDest  <- enterPort (R,iAppl)
-  iP         <- allocNode (Info False M L R Scop 0 0)
-  iQ         <- allocNode (Info False M L R Scop 0 0)
-  linkPorts (M,iP) applRDest
-  linkPorts (L,iP) abstLDest
-  linkPorts (M,iQ) applLDest
-  linkPorts (L,iQ) abstRDest
+  abstLDest  <- getPort net (L,iAbst)
+  abstRDest  <- getPort net (R,iAbst)
+  applLDest  <- getPort net (L,iAppl)
+  applRDest  <- getPort net (R,iAppl)
+  iP         <- allocNode net (Info False M L R Scop 0 0)
+  iQ         <- allocNode net (Info False M L R Scop 0 0)
+  linkPorts net (M,iP) applRDest
+  linkPorts net (L,iP) abstLDest
+  linkPorts net (M,iQ) applLDest
+  linkPorts net (L,iQ) abstRDest
   return ()
 
-commute :: (Word64,Kind,Word16,Word32) -> (Word64,Kind,Word16,Word32) -> State Net ()
-commute (iA,kA,mA,lA) (iB,kB,mB,lB) = do
+commute :: NetS s -> (Word64,Kind,Word16,Word32) -> (Word64,Kind,Word16,Word32) -> ST s ()
+commute net (iA,kA,mA,lA) (iB,kB,mB,lB) = do
   traceM $ "commute: " ++  concat [show iA, ", ", show iB]
-  iP <- allocNode $ Info False M L R kB mB lB
-  iQ <- allocNode $ Info False M L R kB mB lB
-  iR <- allocNode $ Info False M L R kA mA lA
-  iS <- allocNode $ Info False M L R kA mA lA
-  linkPorts (L,iS) (R,iP)
-  linkPorts (R,iR) (L,iQ)
-  linkPorts (R,iS) (R,iQ)
-  linkPorts (L,iR) (L,iP)
-  a1dest <- enterPort (L,iA)
-  a2dest <- enterPort (R,iA)
-  b1dest <- enterPort (L,iB)
-  b2dest <- enterPort (R,iB)
-  linkPorts (M,iP) a1dest
-  linkPorts (M,iQ) a2dest
-  linkPorts (M,iR) b1dest
-  linkPorts (M,iS) b2dest
+  iP <- allocNode net $ Info False M L R kB mB lB
+  iQ <- allocNode net $ Info False M L R kB mB lB
+  iR <- allocNode net $ Info False M L R kA mA lA
+  iS <- allocNode net $ Info False M L R kA mA lA
+  linkPorts net (L,iS) (R,iP)
+  linkPorts net (R,iR) (L,iQ)
+  linkPorts net (R,iS) (R,iQ)
+  linkPorts net (L,iR) (L,iP)
+  a1dest <- getPort net (L,iA)
+  a2dest <- getPort net (R,iA)
+  b1dest <- getPort net (L,iB)
+  b2dest <- getPort net (R,iB)
+  linkPorts net (M,iP) a1dest
+  linkPorts net (M,iQ) a2dest
+  linkPorts net (M,iR) b1dest
+  linkPorts net (M,iS) b2dest
   return ()
 
-commuteScop :: (Word64,Kind,Word16,Word32) -> (Word64,Kind,Word16,Word32) -> State Net ()
-commuteScop (iA,Scop,mA,lA) (iB,kB,mB,lB) = do
-  iP <- allocNode $ Info False M L R kB   mB lB
-  iR <- allocNode $ Info False M L R Scop mA lA
-  iS <- allocNode $ Info False M L R Scop mA lA
-  linkPorts (L,iS) (R,iP)
-  linkPorts (L,iR) (L,iP)
-  a1dest <- enterPort (L,iA)
-  b1dest <- enterPort (L,iB)
-  b2dest <- enterPort (R,iB)
-  linkPorts (M,iP) a1dest
-  linkPorts (M,iR) b1dest
-  linkPorts (M,iS) b2dest
+commuteScop :: NetS s -> (Word64,Kind,Word16,Word32) -> (Word64,Kind,Word16,Word32) -> ST s ()
+commuteScop net (iA,Scop,mA,lA) (iB,kB,mB,lB) = do
+  iP <- allocNode net $ Info False M L R kB   mB lB
+  iR <- allocNode net $ Info False M L R Scop mA lA
+  iS <- allocNode net $ Info False M L R Scop mA lA
+  linkPorts net (L,iS) (R,iP)
+  linkPorts net (L,iR) (L,iP)
+  a1dest <- getPort net (L,iA)
+  b1dest <- getPort net (L,iB)
+  b2dest <- getPort net (R,iB)
+  linkPorts net (M,iP) a1dest
+  linkPorts net (M,iR) b1dest
+  linkPorts net (M,iS) b2dest
   return ()
-commuteScop (iA,kA,mA,lA) (iB,kB,mB,lB) = error "commuteScop can only be called on Scop node"
+commuteScop net (iA,kA,mA,lA) (iB,kB,mB,lB) = error "commuteScop can only be called on Scop node"
 
-rewrite :: (Word64, Word64) -> State Net ()
-rewrite (iA, iB) = do
-  nodes <- gets $ _nodes
-  let a = nodes V.! (fromIntegral iA)
-  let b = nodes V.! (fromIntegral iB)
+rewrite :: NetS s -> (Word64, Word64) -> ST s ()
+rewrite net (iA, iB) = do
+  a <- getNode net iA
+  b <- getNode net iB
   let free ports = do
-        mapM_ (\x -> unlinkPort (x,iA)) ports >> freeNode iA
-        unless (iA == iB) (mapM_ (\x -> unlinkPort (x,iB)) ports >> freeNode iB)
+        mapM_ (\x -> unlinkPort net (x,iA)) ports >> freeNode net iA
+        unless (iA == iB) (mapM_ (\x -> unlinkPort net (x,iB)) ports >> freeNode net iB)
         return ()
   let (Info _ _ _ _ kA mA lA) = getInfo a
   let (Info _ _ _ _ kB mB lB) = getInfo b
@@ -324,115 +361,136 @@ rewrite (iA, iB) = do
   --traceM $ "kinds: " ++ (show kA) ++ ", " ++ (show kB)
 
   case (kA, kB) of
-    (Abst, Abst) -> annihilate (iA,iB)                           >> free [M,L,R]
-    (Abst, Appl) -> beta (iA,iB)           >> free [M,L,R]
-    (Abst, Dupl) -> commute (iA,kA,mA,lA) (iB,kB,mB,lB+1)        >> free [M,L,R]
-    (Abst, Scop) -> commuteScop (iB,kB,mB,lB+1) (iA,kA,mA,lA)    >> free [M,L,R]
+    (Abst, Abst) -> annihilate net (iA,iB)                           >> free [M,L,R]
+    (Abst, Appl) -> beta net (iA,iB)           >> free [M,L,R]
+    (Abst, Dupl) -> commute net (iA,kA,mA,lA) (iB,kB,mB,lB+1)        >> free [M,L,R]
+    (Abst, Scop) -> commuteScop net (iB,kB,mB,lB+1) (iA,kA,mA,lA)    >> free [M,L,R]
 
-    (Appl, Appl) -> annihilate (iA,iB)                           >> free [M,L,R]
-    (Appl, Abst) -> beta (iB,iA)                                 >> free [M,L,R]
-    (Appl, Dupl) -> commute (iA,kA,mA,lA) (iB,kB,mB,lB)          >> free [M,L,R]
-    (Appl, Scop) -> commuteScop (iB,kB,mB,lB) (iA,kA,mA,lA)      >> free [M,L,R]
+    (Appl, Appl) -> annihilate net (iA,iB)                           >> free [M,L,R]
+    (Appl, Abst) -> beta net (iB,iA)                                 >> free [M,L,R]
+    (Appl, Dupl) -> commute net (iA,kA,mA,lA) (iB,kB,mB,lB)          >> free [M,L,R]
+    (Appl, Scop) -> commuteScop net (iB,kB,mB,lB) (iA,kA,mA,lA)      >> free [M,L,R]
 
-    (Dupl, Dupl) -> annihilate (iA,iB)                           >> free [M,L,R]
-    (Dupl, Abst) -> commute (iA,kA,mA,lA+1) (iB,kB,mB,lB)        >> free [M,L,R]
-    (Dupl, Appl) -> commute (iA,kA,mA,lA) (iB,kB,mB,lB)          >> free [M,L,R]
-    (Dupl, Scop) -> commuteScop (iB,kB,mB,lB) (iA,kA,mA,lA+inc)  >> free [M,L,R]
+    (Dupl, Dupl) -> annihilate net (iA,iB)                           >> free [M,L,R]
+    (Dupl, Abst) -> commute net (iA,kA,mA,lA+1) (iB,kB,mB,lB)        >> free [M,L,R]
+    (Dupl, Appl) -> commute net (iA,kA,mA,lA) (iB,kB,mB,lB)          >> free [M,L,R]
+    -- (Dupl, Scop) -> commuteScop net (iB,kB,mB,lB) (iA,kA,mA,lA+inc)  >> free [M,L,R]
 
-    (Scop, Scop) -> annihilateScop (iA,iB)                       >> free [M,L,R]
-    (Scop, Dupl) -> commuteScop (iA,kA,mA,lA) (iB,kB,mB,lB+inc)  >> free [M,L,R]
-    (Scop, Abst) -> commuteScop (iA,kA,mA,lA+1) (iB,kB,mB,lB)    >> free [M,L,R]
-    (Scop, Appl) -> commuteScop (iA,kA,mA,lA) (iB,kB,mB,lB)      >> free [M,L,R]
+    -- TODO
+    -- (Scop, Scop) -> annihilateScop net (iA,iB)                       >> free [M,L,R]
+    -- (Scop, Dupl) -> commuteScop net (iA,kA,mA,lA) (iB,kB,mB,lB+inc)  >> free [M,L,R]
+    (Scop, Abst) -> commuteScop net (iA,kA,mA,lA+1) (iB,kB,mB,lB)    >> free [M,L,R]
+    (Scop, Appl) -> commuteScop net (iA,kA,mA,lA) (iB,kB,mB,lB)      >> free [M,L,R]
 
-reduce :: Net -> (Net, Int)
-reduce x = go (x {_redex = (findRedexes (_nodes x))}) 0
+reduce :: NetS s -> ST s Int
+reduce net = do
+  redexes <- findRedexes <$> (getNodes net >>= V.freeze)
+  setRedex net redexes
+  go net 0
   where
-    go n c = case _redex n of
-      []   -> (n, c)
-      r:rs -> go (execState (rewrite r) (n { _redex = rs })) (c + 1)
+    go net c = do
+      redexes <- getRedex net
+      case redexes of
+        []   -> return c
+        r:rs -> do
+          rewrite net r
+          setRedex net rs
+          go net (c + 1)
 
-test_annihilateAbst :: Net
-test_annihilateAbst = makeNet $
-  [ mkAbst 0 (M,1) (L,2) (L,3) (fromIntegral $ ord 'y')
-  , mkAbst 1 (M,0) (L,4) (L,5) (fromIntegral $ ord 'x')
-  , mkInit 2 (L,0)
-  , mkInit 3 (R,0)
-  , mkInit 4 (L,1)
-  , mkInit 5 (R,1)
-  ]
+-- reduceNoScop :: Net -> (Net, Int)
+reduceNoScop = reduce -- TODO
 
-test_annihilateAppl :: Net
-test_annihilateAppl = makeNet $
-  [ mkAppl 0 (M,1) (L,2) (L,3)
-  , mkAppl 1 (M,0) (L,4) (L,5)
-  , mkInit 2 (L,0)
-  , mkInit 3 (R,0)
-  , mkInit 4 (L,1)
-  , mkInit 5 (R,1)
-  ]
+reduceFreeze :: Net -> (Net, Int)
+reduceFreeze net = runST $ do
+  net' <- thawNet net
+  i    <- reduce net'
+  net  <- freezeNet net'
+  return (net, i)
 
-test_annihilateDupl :: Net
-test_annihilateDupl = makeNet $
-  [ mkDupl 0 (M,1) (L,2) (L,3) 0
-  , mkDupl 1 (M,0) (L,4) (L,5) 0
-  , mkInit 2 (L,0)
-  , mkInit 3 (R,0)
-  , mkInit 4 (L,1)
-  , mkInit 5 (R,1)
-  ]
+-- makeNet :: [Node] -> Net
+-- makeNet nodes = let vs = V.fromList nodes in Net vs [] (findRedexes vs)
 
-test_annihilateScop :: Net
-test_annihilateScop = makeNet $
-  [ mkScop 0 (M,1) (L,2) 0
-  , mkScop 1 (M,0) (L,3) 0
-  , mkInit 2 (L,0)
-  , mkInit 3 (L,1)
-  ]
+-- test_annihilateAbst :: Net
+-- test_annihilateAbst = makeNet $
+--   [ mkAbst 0 (M,1) (L,2) (L,3) (fromIntegral $ ord 'y')
+--   , mkAbst 1 (M,0) (L,4) (L,5) (fromIntegral $ ord 'x')
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (R,0)
+--   , mkInit 4 (L,1)
+--   , mkInit 5 (R,1)
+--   ]
 
-test_eraseDupl :: Net
-test_eraseDupl = makeNet $
-  [ mkDupl 0 (M,0) (L,1) (L,2) 0
-  , mkInit 1 (L,0)
-  , mkInit 2 (R,0)
-  ]
+-- test_annihilateAppl :: Net
+-- test_annihilateAppl = makeNet $
+--   [ mkAppl 0 (M,1) (L,2) (L,3)
+--   , mkAppl 1 (M,0) (L,4) (L,5)
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (R,0)
+--   , mkInit 4 (L,1)
+--   , mkInit 5 (R,1)
+--   ]
 
-test_eraseAbst :: Net
-test_eraseAbst = makeNet $
-  [ mkAbst 0 (M,0) (L,1) (L,2) (fromIntegral $ ord 'x')
-  , mkInit 1 (L,0)
-  , mkInit 2 (R,0)
-  ]
+-- test_annihilateDupl :: Net
+-- test_annihilateDupl = makeNet $
+--   [ mkDupl 0 (M,1) (L,2) (L,3) 0
+--   , mkDupl 1 (M,0) (L,4) (L,5) 0
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (R,0)
+--   , mkInit 4 (L,1)
+--   , mkInit 5 (R,1)
+--   ]
 
-test_eraseAppl :: Net
-test_eraseAppl = makeNet $
-  [ mkAppl 0 (M,0) (L,1) (L,2)
-  , mkInit 1 (L,0)
-  , mkInit 2 (R,0)
-  ]
+-- test_annihilateScop :: Net
+-- test_annihilateScop = makeNet $
+--   [ mkScop 0 (M,1) (L,2) 0
+--   , mkScop 1 (M,0) (L,3) 0
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (L,1)
+--   ]
 
-test_eraseScop :: Net
-test_eraseScop = makeNet $
-  [ mkScop 0 (M,0) (L,1) 0
-  , mkInit 1 (L,0)
-  ]
+-- test_eraseDupl :: Net
+-- test_eraseDupl = makeNet $
+--   [ mkDupl 0 (M,0) (L,1) (L,2) 0
+--   , mkInit 1 (L,0)
+--   , mkInit 2 (R,0)
+--   ]
 
-test_betaAbstAppl :: Net
-test_betaAbstAppl = makeNet $
-  [ mkAbst 0 (M,1) (L,2) (L,3) (fromIntegral $ ord 'x')
-  , mkAppl 1 (M,0) (L,4) (L,5)
-  , mkInit 2 (L,0)
-  , mkInit 3 (R,0)
-  , mkInit 4 (L,1)
-  , mkInit 5 (R,1)
-  ]
+-- test_eraseAbst :: Net
+-- test_eraseAbst = makeNet $
+--   [ mkAbst 0 (M,0) (L,1) (L,2) (fromIntegral $ ord 'x')
+--   , mkInit 1 (L,0)
+--   , mkInit 2 (R,0)
+--   ]
 
-test_betaApplAbst :: Net
-test_betaApplAbst = makeNet $
-  [ mkAppl 0 (M,1) (L,2) (L,3)
-  , mkAbst 1 (M,0) (L,4) (L,5) (fromIntegral $ ord 'x')
-  , mkInit 2 (L,0)
-  , mkInit 3 (R,0)
-  , mkInit 4 (L,1)
-  , mkInit 5 (R,1)
-  ]
+-- test_eraseAppl :: Net
+-- test_eraseAppl = makeNet $
+--   [ mkAppl 0 (M,0) (L,1) (L,2)
+--   , mkInit 1 (L,0)
+--   , mkInit 2 (R,0)
+--   ]
 
+-- test_eraseScop :: Net
+-- test_eraseScop = makeNet $
+--   [ mkScop 0 (M,0) (L,1) 0
+--   , mkInit 1 (L,0)
+--   ]
+
+-- test_betaAbstAppl :: Net
+-- test_betaAbstAppl = makeNet $
+--   [ mkAbst 0 (M,1) (L,2) (L,3) (fromIntegral $ ord 'x')
+--   , mkAppl 1 (M,0) (L,4) (L,5)
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (R,0)
+--   , mkInit 4 (L,1)
+--   , mkInit 5 (R,1)
+--   ]
+
+-- test_betaApplAbst :: Net
+-- test_betaApplAbst = makeNet $
+--   [ mkAppl 0 (M,1) (L,2) (L,3)
+--   , mkAbst 1 (M,0) (L,4) (L,5) (fromIntegral $ ord 'x')
+--   , mkInit 2 (L,0)
+--   , mkInit 3 (R,0)
+--   , mkInit 4 (L,1)
+--   , mkInit 5 (R,1)
+--   ]

@@ -9,6 +9,7 @@ import           Data.Vector.Unboxed.Mutable (MVector)
 import qualified Data.Vector.Unboxed.Mutable as MV
 import           Control.Monad
 import           Control.Monad.ST
+import           Data.STRef
 
 doTimes :: Monad m => Int -> (Int -> Bool) -> (Int -> Int) -> (Int -> m a) -> m ()
 doTimes i p inc body
@@ -51,7 +52,7 @@ lastWire nodes = go nodes (MV.length nodes - 1) where
 writeSlot :: MVector s Node -> Int -> Slot -> (Slot, Word64) -> ST s ()
 writeSlot mv idx x p = do
   node <- MV.read mv idx
-  MV.write mv idx $ setSlot node x p
+  MV.write mv idx $ substSlot node x p
 
 changeKind :: MVector s Node -> Int -> Kind -> ST s ()
 changeKind mv idx kind = do
@@ -65,12 +66,12 @@ releaseNode mv idx = do
 
 linkWire :: MVector s Node -> Word64 -> (Slot, Word64) -> ST s ()
 linkWire mv wirePos (portSlot, portPos) = do
-  (s,i) <- getPort L <$> MV.read mv (fromEnum wirePos)
+  (s,i) <- portDest L <$> MV.read mv (fromEnum wirePos)
   writeSlot mv (fromEnum i) s (portSlot, portPos)
-  (s,i) <- getPort L <$> MV.read mv (fromEnum wirePos) -- Need to fetch again in case it was a loop
+  (s,i) <- portDest L <$> MV.read mv (fromEnum wirePos) -- Need to fetch again in case it was a loop
   writeSlot mv (fromEnum portPos) portSlot  (s,i)
 
-findFreeNodes :: V.Vector Node -> [(Word64)]
+findFreeNodes :: Vector Node -> [(Word64)]
 findFreeNodes vs = V.ifoldr addFreeNode [] vs
   where
     addFreeNode :: Int -> Node -> [Word64] -> [Word64]
@@ -102,7 +103,7 @@ compile trm = toNet nodes
       VarA idx     -> do
         net <- go (VarA (idx - 1)) (dep - 1)
         let len = toEnum $ MV.length net
-        (s,i) <- getPort L <$> MV.read net 0
+        (s,i) <- portDest L <$> MV.read net 0
         writeSlot net 0            L (L, len)
         writeSlot net (fromEnum i) s (M, len)
         net   <- MV.grow net 2
@@ -246,33 +247,39 @@ fromNodes nodes = go nodes start 0
         Init -> error "Should not happen (INIT)"
         Dupl -> error "Should not happen (DUPL)"
 
-reduceNoScop :: Net -> (Net, Int)
-reduceNoScop x = reduce x -- TODO
+toNetS :: MVector s Node -> ST s (NetS s)
+toNetS nodes = do
+  fnodes <- V.freeze nodes
+  redexes <- newSTRef $ findRedexes fnodes
+  frees   <- newSTRef $ findFreeNodes fnodes
+  rnodes  <- newSTRef $ nodes
+  return $ NetS rnodes frees redexes
 
-decompile :: Net -> Anon
-decompile net = runST $ do
-  mnodes <- V.thaw $ _nodes net
-  unwind mnodes
-  nodes  <- V.freeze mnodes
-  let (net, _) = reduce $ toNet nodes
-  mnodes <- V.thaw $ _nodes net
-  scopeRemove mnodes
-  nodes  <- V.freeze mnodes
-  let (net, _) = reduceNoScop $ toNet nodes
-  mnodes <- V.thaw $ _nodes net
-  loopCut mnodes
-  nodes  <- V.freeze mnodes
-  let (net, _) = reduceNoScop $ toNet nodes
-  return (fromNodes $ _nodes net)
+decompile :: NetS s -> ST s Anon
+decompile net = do
+  nodes <- getNodes net
+  unwind nodes
+  net <- toNetS nodes
+  reduce net
+  nodes <- getNodes net
+  scopeRemove nodes
+  net <- toNetS nodes
+  reduceNoScop net
+  nodes <- getNodes net
+  loopCut nodes
+  net <- toNetS nodes
+  reduceNoScop net
+  nodes <- getNodes net >>= V.freeze
+  return (fromNodes nodes)
 
-churchTwo :: Anon
-churchTwo = LamA (LamA (AppA (VarA 1) (AppA (VarA 1) (VarA 0))))
+-- churchTwo :: Anon
+-- churchTwo = LamA (LamA (AppA (VarA 1) (AppA (VarA 1) (VarA 0))))
 
-testCompile :: Net
-testCompile = compile (AppA churchTwo churchTwo)
+-- testCompile :: Net
+-- testCompile = compile (AppA churchTwo churchTwo)
 
-testReduce :: Net
-testReduce = fst $ reduce testCompile
+-- testReduce :: Net
+-- testReduce = fst $ reduce testCompile
 
-testDecompile :: Anon
-testDecompile = decompile testReduce
+-- testDecompile :: Anon
+-- testDecompile = decompile testReduce
